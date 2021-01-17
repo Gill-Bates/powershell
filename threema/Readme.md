@@ -1,4 +1,4 @@
-![Project Logo](https://raw.githubusercontent.com/Gill-Bates/threema/main/img/logo.png)
+![Project Logo](https://raw.githubusercontent.com/Gill-Bates/powershell/main/threema/img/logo.png)
 
 # Threema Powershell Functions
 With this Toolset I want to provide you functions to use the awesome [Threema-Gateway](https://gateway.threema.ch/) with Powershell. You need a paid Threema-Basic ID to use the Gateway. **The free trial ID will not work.**
