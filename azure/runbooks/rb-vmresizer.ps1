@@ -12,24 +12,22 @@
 [CmdletBinding()]
 param(
     [parameter(Mandatory = $true)]
-    [string]$DesiredSKU = "Standard_F8s_v2",
-    [parameter(Mandatory = $false)]
-    [string]$ResourceGroup = "myrg",
-    [parameter(Mandatory = $false)]
-    [string]$SubscriptionId = ""
+    [string]$DesiredSKU = "Standard_F8s_v2", # Desired SKU-Size
+    [parameter(Mandatory = $true)]
+    [string]$ResourceGroup = "myrg", # Name of the ResourceGroup
+    [parameter(Mandatory = $true)]
+    [string]$SubscriptionId = "", # Your Subscription-Id like XXXX-XXXXX-XXXX- ...
+    [parameter(Mandatory = $true)]
+    [string]$Location = "westeurope" # Location of the VMs
 )
 
 # Initializing Stopwatch
 if ($?) { $StopWatch = [system.diagnostics.stopwatch]::StartNew() }
 
-#region StaticVariables
-[string]$Location = "WestEurope" #Location of the VMs
-#endregion StaticVariables
-
 function Get-Logtime {
     # This function is optimzed for Azure Automation!
     $Timeformat = "yyyy-MM-dd HH:mm:ss" #yyyy-MM-dd HH:mm:ss.fff
-    if ((Get-TimeZone).Id -ne "W. Europe Standard Time") {
+    if ((Get-TimeZone).Id -ne "W. Europe Standard Time") { # Adapt the TimeZone depending on your needs: (Get-TimeZone).Id
         try {
             $tDate = (Get-Date).ToUniversalTime()
             $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById("W. Europe Standard Time")
