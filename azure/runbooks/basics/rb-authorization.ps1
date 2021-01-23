@@ -7,7 +7,7 @@
 
 #Requires -Module Az.Accounts
 
-#region Authorization
+#region Authorization with Certificate
 try {
     Write-Output "Logging in into Azure Automation ..."
     # Ensures you do not inherit an AzContext in your runbook
