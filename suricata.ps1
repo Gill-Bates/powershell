@@ -45,18 +45,6 @@ if (!(Test-Path -Path $db -PathType leaf)) {
     }
 }
 
-##### OPEN DATABASE CONNECTION ######
-#####################################
-
-try {
-    Write-Output "Open Database Connection '$db' ..."
-    $conn = New-SQLiteConnection @Verbose -DataSource $db
-    $conn.ConnectionString | Out-Null
-}
-catch {
-    throw "[ERROR] Can't open Database Connection $($_.Exception.Message)!"
-}
-
 ####################### PROGRAM AREA #######################
 ############################################################
 
@@ -69,13 +57,34 @@ if (!(Test-Path -Path $EveJsonPath)) {
 # Parse JSON
 Write-Output ""
 Write-Output "Loading eve.json. Please wait a moment ..."
-$EveJson = Get-Content $EveJsonPath | ConvertFrom-Json |  Where-Object { $_.event_type -Like "anomaly" -or $_.event_type -Like "alerts" } 
+
+if ($ClearEveJson) {
+
+    $EveJson = Get-Content $EveJsonPath | ConvertFrom-Json | Where-Object { $_.event_type -Like "anomaly" -or $_.event_type -Like "alerts" } 
+}
+else {
+
+    $EveJson = Get-Content $EveJsonPath | ConvertFrom-Json | Where-Object { $_.timestamp -gt (Get-Date).AddHours(-$Bantime) } | Where-Object { $_.event_type -Like "anomaly" -or $_.event_type -Like "alerts" } 
+}
 
 if (!$EveJson) {
 
-    Write-Output "No Alerts and Anomalies found! Exit here."
+    Write-Output "No Alerts or Anomalies found! Exit here."
     Write-Output ""
     Exit
+}
+
+##### OPEN DATABASE CONNECTION ######
+#####################################
+
+try {
+    Write-Output ""
+    Write-Output "Open Database Connection '$db' ..."
+    $conn = New-SQLiteConnection @Verbose -DataSource $db
+    $conn.ConnectionString | Out-Null
+}
+catch {
+    throw "[ERROR] Can't open Database Connection $($_.Exception.Message)!"
 }
 
 Write-Warning "'$($EveJson.Count)' malicious Events in the past '$TimeSpan' hours found!" -WarningAction Continue
