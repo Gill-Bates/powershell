@@ -5,17 +5,60 @@
 
 #region StaticVariables
 [string]$EveJsonPath = "/var/log/suricata/eve.json"
-[string]$db = "/root/powershell/suricata.sqlite" # Path to DB
-[int]$Bantime = 168 # Timespan to block
-[bool]$ClearEveJson = $true # Clear eve.json after every run to save time during loading?
+[string]$db = "./suricata.sqlite" # Path to DB
+[int]$Bantime = 168 # Timespan to block in Hours
+[bool]$ClearEveJson = $false # Clear eve.json after every run to save time during loading?
+[bool]$BlockClassBNetwork = $true # Blocks the full /16 Network of an malicious Host (65.534 IP addresses)
 #endregion
 
 ######## IGNORE IPs ########
 [array]$ignoreIPs = @(
 
     "$((Invoke-WebRequest ifconfig.me/ip).Content.Trim())" # Ignore own IP
-    "194.126.228.13"
+    "194.126.228.13" # Gothaer
+    "185.30.32.4" # Webgo24
 )
+
+###################### FUNCTIONS AREA ######################
+############################################################
+
+function Set-sqlIpRecord {
+    param (
+        [Parameter(Position = 0)][string]$hostIp,
+        [Parameter(Position = 1)][string]$ASN,
+        [Parameter(Position = 2)][string]$ISP,
+        [Parameter(Position = 3)][string]$Country,
+        [Parameter(Position = 4)][string]$Region,
+        [Parameter(Position = 5)][string]$City,
+        [Parameter(Position = 6)][string]$timestampBan
+    )
+
+    [int]$Id = Invoke-SqliteQuery -SQLiteConnection $conn -Query "SELECT MAX(Id) FROM suricata" | Select-Object -ExpandProperty 'MAX(Id)'
+    [int]$Id++ | Out-Null
+
+    Invoke-SqliteQuery -SQLiteConnection $conn -Query "INSERT INTO suricata (
+        Id,
+        hostIp,
+        ASN,
+        ISP,
+        Country,
+        Region,
+        City,
+        timestampBan,
+        timestampUnban
+        )
+    VALUES (
+        '$Id',
+        '$hostIP',
+        '$ASN',
+        '$ISP',
+        '$Country',
+        '$Region',
+        '$City',
+        '$timestampBan',
+        '$null'
+        );"
+}
 
 #################### DATABASE SETUP AREA ###################
 ############################################################
@@ -26,23 +69,23 @@ if (Test-Path -Path $db -PathType leaf) {
     Write-Output ""
     Write-Output "[OK] Database '$db' found! Proceed ..."
 }
-
-if (!(Test-Path -Path $db -PathType leaf)) {
+elseif (!(Test-Path -Path $db -PathType leaf)) {
 
     try {
+        
+        Write-Output ""
         Write-Warning "Database not found! Creating '$db' ..." -WarningAction Continue
 
         $query = "CREATE TABLE suricata (
-            Id INTEGER(6) PRIMARY KEY,
-            hostIp NVARCHAR(250),
-            ASN NVARCHAR(250),
-            ISP NVARCHAR(250),
-            Country NVARCHAR(250),
-            Region NVARCHAR(250),
-            City NVARCHAR(250),
-            EventType NVARCHAR(250),
-        	timestampBan NVARCHAR(250),
-            timestampUnban NVARCHAR(250)
+            Id INTEGER(6) PRIMARY KEY NULL,
+            hostIp NVARCHAR(250) NULL,
+            ASN NVARCHAR(250) NULL,
+            ISP NVARCHAR(250) NULL,
+            Country NVARCHAR(250) NULL,
+            Region NVARCHAR(250) NULL,
+            City NVARCHAR(250) NULL,
+        	timestampBan NVARCHAR(250) NULL,
+            timestampUnban NVARCHAR(250) NULL
           )"
           
         Invoke-SqliteQuery -Query $query -DataSource $db
@@ -78,7 +121,8 @@ if (!(Test-Path -Path $EveJsonPath)) {
 
 # Parse JSON
 Write-Output ""
-Write-Output "Loading 'eve.json'! Please wait a moment ..."
+Write-Output "Loading 'eve.json'! Please wait a Moment ..."
+Write-Output "[INFO] Ignoring '$($ignoreIPs.Count)' IPs: $($ignoreIPs -join ", ")"
 
 if ($ClearEveJson) {
 
@@ -113,64 +157,64 @@ if ($EveJson) {
         $EveJsonGroup | ForEach-Object {
 
             # Blocking now
-            if ($ufw -match $_.Name) {
+            if ($BlockClassBNetwork) {
 
-                Write-Output "[$count] Host '$($_.Name)' already blocked!"
+                $hostIP = $_.Name.Split('.')[0] + "." + $_.Name.Split('.')[1] + ".0." + "0/16" 
+            }
+            else {
+                $hostIp = $_.Name
+            }
+
+            if ($ufw -match $hostIp) {
+
+                Write-Output "[$count] Host '$hostIp' already blocked!"
                 $count++
             }
             else {
-                Write-Output "[$count] Blocking '$($_.Name)' now ..."
-                sudo ufw reject from $_.Name to any | Out-Null
-                $count++
 
-                # Adding IPs to Database
-                [int]$Id = Invoke-SqliteQuery -SQLiteConnection $conn -Query "SELECT Id FROM suricata;" | Select-Object -ExpandProperty Id | Sort-Object -Descending | Select-Object -First 1
-                [int]$Id++ | Out-Null
+                # Blocking entire Class-B Network Range
+                if ($BlockClassBNetwork) {
 
-                $ipInfo = Invoke-RestMethod -Method "GET" -Uri "http://ip-api.com/json/$([IPAddress]$_.Name)"
+                    $ClassBIp = $_.Name.Split('.')[0] + "." + $_.Name.Split('.')[1] + ".0." + "0/16" 
+                    Write-Output "[$count] Blocking Class-B Network '$ClassBIp' now ..."
+                    
+                    sudo ufw reject from $ClassBIp to any | Out-Null
 
-                Invoke-SqliteQuery -SQLiteConnection $conn -Query "INSERT INTO suricata (
-                    Id,
-                    hostIp,
-                    ASN,
-                    ISP,
-                    Country,
-                    Region,
-                    City,
-                    EventType
-                    timestampBan,
-                    timestampUnban
-                    )
-                VALUES (
-                    '$Id',
-                    '$([IPAddress]$_.Name)',
-                    '$($ipInfo.as)',
-                    '$($ipInfo.isp)',
-                    '$($ipInfo.country)',
-                    '$($ipInfo.regionName)',
-                    '$($ipInfo.City)',
-                    '$($_.event_type)',
-                    '$(Get-Date)'
-                    );"
+                    # Adding IPs to Database
+                    $ipInfo = Invoke-RestMethod -Method "GET" -Uri "http://ip-api.com/json/$([IPAddress]$_.Name)"
+                    Set-sqlIpRecord -hostIp $ClassBIp -ASN $($ipInfo.as) -ISP $($ipInfo.isp) -Country $($ipInfo.country) -Region $($ipInfo.regionName) -City $($ipInfo.City) -timestampBan $(Get-Date)
+                    $count++
+
+                }
+                else {
+
+                    Write-Output "[$count] Blocking '$($_.Name)' now ..."
+                    sudo ufw reject from $_.Name to any | Out-Null
+
+                    # Adding IPs to Database
+                    [string]$ipInfo = Invoke-RestMethod -Method "GET" -Uri "http://ip-api.com/json/$([IPAddress]$_.Name)"
+                    Set-sqlIpRecord -hostIp $([IPAddress]$_.Name) -ASN $($ipInfo.as) -ISP $($ipInfo.isp) -Country $($ipInfo.country) -Region $($ipInfo.regionName) -City $($ipInfo.City) -timestampBan $(Get-Date)
+                    $count++
+                }
             }
         }
     }
 }
 
 # Remove expired Hosts depending on the defined Bantime
+$dbRecords = Invoke-SqliteQuery -SQLiteConnection $conn -Query "SELECT * FROM suricata WHERE timestampUnban IS NULL;"
 Write-Output ""
-Write-Output "Checking for blockend Hosts longer than '$Bantime' hours ..."
-
-$dbRecords = Invoke-SqliteQuery -SQLiteConnection $conn -Query "SELECT * FROM suricata;"
-
 if ($dbRecords) {
 
+    Write-Output "Checking '$($dbRecords.Count)' DB-Records for blockend Hosts longer than '$Bantime' hours ..."
+    [datetime]$UnbanTimeStamp = (Get-Date).AddHours(-$Bantime) 
     [int]$count = 1
+
     $dbRecords | ForEach-Object {
-        if ( (Get-Date).AddHours(-$Bantime) -gt $_.timestamp  ) {
+        if ( $UnbanTimeStamp -gt $_.timestampBan ) {
             
             Write-Output "[OK] [$count] Host '$($_.hostIp)' removed!"
-            sh /root/powershell/suricata_unban.sh $_.hostIp | Out-Null
+            sh ./suricata_unban.sh $_.hostIp | Out-Null
 
             # Update Database
             Invoke-SqliteQuery -SQLiteConnection $conn -Query "UPDATE suricata SET timestampUnban = '$(Get-Date)' WHERE Id = $($_.Id);"
@@ -178,15 +222,19 @@ if ($dbRecords) {
         }
     }
 }
+else {
+    
+    Write-Output "[OK] No DB-Records found to unblock in the past '$Bantime' hours ..."
+}
 
 # Finishing Tasks
 if ($?) {
-    
-    Write-Output ""
+       
     if ($ClearEveJson) {
 
         Write-Warning "Empty 'eve.json' now ..." -WarningAction Continue
         Clear-Content -Path $EveJsonPath -Force
+        Write-Output ""
     }
     
     # Garbage Collection
