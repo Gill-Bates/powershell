@@ -44,8 +44,7 @@ function Set-sqlIpRecord {
         Country,
         Region,
         City,
-        timestampBan,
-        timestampUnban
+        timestampBan
         )
     VALUES (
         '$Id',
@@ -55,8 +54,7 @@ function Set-sqlIpRecord {
         '$Country',
         '$Region',
         '$City',
-        '$timestampBan',
-        '$null'
+        '$timestampBan'
         );"
 }
 
@@ -77,15 +75,15 @@ elseif (!(Test-Path -Path $db -PathType leaf)) {
         Write-Warning "Database not found! Creating '$db' ..." -WarningAction Continue
 
         $query = "CREATE TABLE suricata (
-            Id INTEGER(6) PRIMARY KEY NULL,
-            hostIp NVARCHAR(250) NULL,
-            ASN NVARCHAR(250) NULL,
-            ISP NVARCHAR(250) NULL,
-            Country NVARCHAR(250) NULL,
-            Region NVARCHAR(250) NULL,
-            City NVARCHAR(250) NULL,
-        	timestampBan NVARCHAR(250) NULL,
-            timestampUnban NVARCHAR(250) NULL
+            Id INTEGER(6) PRIMARY KEY,
+            hostIp NVARCHAR(250),
+            ASN NVARCHAR(250),
+            ISP NVARCHAR(250),
+            Country NVARCHAR(250),
+            Region NVARCHAR(250),
+            City NVARCHAR(250),
+        	timestampBan NVARCHAR(250),
+            timestampUnban NVARCHAR(250)
           )"
           
         Invoke-SqliteQuery -Query $query -DataSource $db
