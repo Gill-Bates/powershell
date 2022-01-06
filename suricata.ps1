@@ -5,7 +5,7 @@
 
 #region StaticVariables
 [string]$EveJsonPath = "/var/log/suricata/eve.json"
-[string]$db = "./suricata.sqlite" # Path to DB
+[string]$db = "/root/powershell/suricata.sqlite" # Path to DB
 [int]$Bantime = 168 # Timespan to block in Hours
 [bool]$ClearEveJson = $true # Clear eve.json after every run to save time during loading?
 [bool]$BlockClassBNetwork = $true # Blocks the full /16 Network of an malicious Host (65.534 IP addresses)
