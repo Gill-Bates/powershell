@@ -16,8 +16,8 @@ $Logfile = "/root/reolink.log"
 #0 0 * * * pwsh -File "/root/reolink.ps1" > /dev/null 2>&1
 #endregion
 
-####### FUNCTIONS AREA #######
-############################
+############################################ FUNCTION AREA ##################################################################
+#############################################################################################################################
 
 function Get-Logtime {
     # This function is optimzed for Azure Automation!
@@ -36,8 +36,8 @@ function Get-Logtime {
     return $(Get-Date -Format $Timeformat)
 }
 
-####### PROGRAM AREA #######
-############################
+############################################# PROGRAM AREA ##################################################################
+#############################################################################################################################
 Start-Transcript -Path $Logfile -UseMinimalHeader
 
 $KillDate = (Get-Date).AddDays(-$DeleteDays)

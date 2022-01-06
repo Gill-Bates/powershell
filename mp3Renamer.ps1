@@ -1,5 +1,8 @@
-# Mp3-Renamer
-# Last Update: 07.11.2021
+<# 
+.SYNOPSIS Mp3-Renamer
+.DESCRIPTION 
+.NOTES Author: Gill Bates, Last Update: 07.11.2021
+#>
 
 [string]$Path = "C:\Users\Tobias\Downloads\VA_-_Q-Dance_Hardstyle_Top_100-WEB-2021"
 [int]$leadingNumbers = 3
