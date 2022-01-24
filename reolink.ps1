@@ -1,61 +1,115 @@
 <# 
-.SYNOPSIS Housekeeping for Reolink Videos
-.DESCRIPTION 
-.NOTES Author: Gill Bates, Last Update: 08.08.2021
+.SYNOPSIS Script to convert Reolink Videos with ffmpeg
+.NOTES Author: Tobias Steiner, Date: 24.01.2022
 #>
 
 #region staticVariables
-$homeDir = "/home/reolink/records"
-$DeleteDays = 14
-$Logfile = "/root/reolink.log"
+[string]$workingDir = "/root/pwsh/reolink"
+[string]$BaseDir = "/home/reolink/records/"
+[string]$WatermarkFont = "$workingDir/Roboto-Bold.ttf"
+[string]$TranscodingMode = "slow"
+[int]$KillDays = 7 # Age of files to delete
 #endregion
 
-#region Cronjob
-# Setup Cron every Midnight!
-# Delete Reolink Videos every Midnight
-#0 0 * * * pwsh -File "/root/reolink.ps1" > /dev/null 2>&1
-#endregion
+####### FUNCTIONS AREA #########
+if ($?) { $StopWatch = [system.diagnostics.stopwatch]::StartNew() }
 
-############################################ FUNCTION AREA ##################################################################
-#############################################################################################################################
-
-function Get-Logtime {
-    # This function is optimzed for Azure Automation!
-    $Timeformat = "yyyy-MM-dd HH:mm:ss" #yyyy-MM-dd HH:mm:ss.fff
-    if ((Get-Timezone).Id -ne "W. Europe Standard Time") {
-        try {
-            $tDate = (Get-Date).ToUniversalTime()
-            $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById("W. Europe Standard Time")
-            $TimeZone = [System.TimeZoneInfo]::ConvertTimeFromUtc($tDate, $tz)
-            return $(Get-Date -Date $TimeZone -Format $Timeformat)
-        }
-        catch {
-            return $(Get-Date -Format $Timeformat)
-        }
+function Get-StopWatch {
+    if (!$StopWatch.IsRunning) {
+        return "n/a"
     }
-    return $(Get-Date -Format $Timeformat)
+    if ($StopWatch.Elapsed.Days -ne 0) {
+        return "$($StopWatch.Elapsed.Days) days !!!" 
+    }
+    if ($StopWatch.Elapsed.Hours -eq 0 -and $StopWatch.Elapsed.Minutes -ne 0) {
+        $TimeResult = [math]::round($Stopwatch.Elapsed.TotalMinutes, 2)
+        return "$TimeResult Minutes" 
+    }
+    if ($StopWatch.Elapsed.Hours -eq 0 -and $StopWatch.Elapsed.Minutes -eq 0) {
+        $TimeResult = [math]::round($Stopwatch.Elapsed.TotalSeconds, 0)
+        return "$TimeResult seconds" 
+    }
 }
 
-############################################# PROGRAM AREA ##################################################################
-#############################################################################################################################
-Start-Transcript -Path $Logfile -UseMinimalHeader
+####### PROGRAM AREA #########
 
-$KillDate = (Get-Date).AddDays(-$DeleteDays)
-$KillFiles = Get-ChildItem -Path $homeDir -Recurse -Force | Where-Object { $_.CreationTime -lt $KillDate }
+# Start Logging
+Get-ChildItem -Path "$workingDir/*.log" | Remove-Item -Force # Delete previous Logs
+Start-Transcript -Path "$workingDir\reolink_$((Get-Date).ToString('yyyyMMdd-HHmmss')).log" -UseMinimalHeader | Out-Null
+
+#region KILL AREA
+$KillDate = (Get-Date).AddDays(-$KillDays)
+Write-Output "[HOUSEKEEPING] Searching for Files older than '$KillDays' Days ($($KilLDate.ToString('yyyy-MM-dd'))) ..."
+
+$KillFiles = Get-ChildItem -Path $BaseDir -Recurse | Where-Object { $_.LastWriteTime -lt $KillDate }
 
 if ($KillFiles) {
-    if ($?) { Write-Output "[$(Get-Logtime)] [OK] Found '$($KillFiles.Count) Items' to delete ..." }
+    Write-Output "[HOUSEKEEPING] Found '$($KillFiles.Count)' Files to remove!"
 
-    $KillFiles | ForEach-Object {
+    $KillFiles | ForEach-Object -Parallel {
 
-        Write-Output "[$(Get-Logtime)] Remove '$($_.PSChildName)' ..."
-        Remove-Item -Path $_.FullName -Recurse -Force
+        Write-Output "Remove File '$($_.FullName)' ..."
+        Remove-Item -Path $_.FullName -Force -Recurse
     }
 }
 else {
-    Write-Output "[$(Get-Logtime)] [OK] No Items found to delete! Exit here."
-    exit
+    Write-Output "[HOUSEKEEPING] [OK] No Files found to remove. Proceed ..."
+    Write-Output ""
 }
-Write-Output "[$(Get-Logtime)] [OK] Job is done! Exit here."
-Stop-Transcript
-exit
+#endregion
+
+#region CONVERT AREA
+$AllItems = Get-ChildItem $BaseDir -Recurse -Force | Where-Object { $_.Extension -Like ".mp4" -and $_.FullName -notlike "*_low.mp4" }
+Write-Output "[TRANSCODING] '$($AllItems.Count)' total Videos found to check!"
+
+$AllItems | Sort-Object -Property Name | ForEach-Object -Parallel {
+
+    # Generate Variables
+    $OutputPath = $_.DirectoryName + "/_low/"
+    $OutputFullPath = $_.DirectoryName + "/_low/" + $_.BaseName + "_low" + $_.Extension
+    $Mediainfo = (mediainfo --output=JSON $OutputFullPath | ConvertFrom-Json).media.track
+    $WatermarkText = "[LowRes] " + $_.FullName
+
+    # Check for already converted Files
+    if ( $Mediainfo.OverallBitRate ) {
+
+        Write-Output "[TRANSCODING] [OK] Video '$OutputFullPath' already converted! Skip Process ..."
+        Exit
+    }
+    elseif ( $Mediainfo -and !$Mediainfo.OverallBitRate) {
+        
+        Write-Warning "[TRANSCODING] '$OutputFullPath' exist, but corrupt! Encoding again!" -WarningAction Continue
+    }
+
+    Write-Output "[TRANSCODING] Start transcoding '$($_.FullName)' ..."
+
+    if (!(Test-Path -Path $OutputPath)) {
+        New-Item -ItemType Directory -Path ($_.DirectoryName + "/_low/") -Force | Out-Null
+    }
+
+    ffmpeg -i $($_.FullName) `
+        -c:v libx264 `
+        -vf scale=720:-1 `
+        -vf "scale=720:-1, drawtext=fontfile='$WatermarkFont':text='$WatermarkText':x=10:y=H-th-10:fontsize='15':fontcolor=white:shadowcolor=black:shadowx=-3:shadowy=3:" `
+        -preset $using:TranscodingMode `
+        -crf 24 `
+        -c:a aac `
+        -b:a 32k `
+        $OutputFullPath `
+        -y `
+        -loglevel error
+
+    if ($?) { 
+        $Mediainfo = (mediainfo --output=JSON $OutputFullPath | ConvertFrom-Json).media.track
+        Write-Output "[TRANSCODING] [OK] Transcoding into '$($Mediainfo.Format)' was successful!" 
+    }
+}
+#endregion
+
+if ($?) {
+    Write-Output "[OK] All operations done in '$(Get-StopWatch)'. Exit here!"
+    Write-Output ""
+}
+$Stopwatch.Stop()
+Stop-Transcript | Out-Null # Stop Logging
+# End of Script
