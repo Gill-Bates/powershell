@@ -1,14 +1,15 @@
 <# 
 .SYNOPSIS Script to convert Reolink Videos with ffmpeg
-.NOTES Author: Tobias Steiner, Date: 24.01.2022
+.NOTES Author: Tobias Steiner, Date: 13.06.2022
 #>
 
 #region staticVariables
 [string]$workingDir = "/root/pwsh/reolink"
 [string]$BaseDir = "/home/reolink/records/"
-[string]$WatermarkFont = "$workingDir/Roboto-Bold.ttf"
+[string]$WatermarkFont = "$workingDir/Roboto/Roboto-Bold.ttf"
+[string]$fontDownloadUrl = "https://fonts.google.com/download?family=Roboto"
 [string]$TranscodingMode = "slow"
-[int]$KillDays = 7 # Age of files to delete
+[int]$KillDays = 31 # Age of files to delete
 #endregion
 
 ####### FUNCTIONS AREA #########
@@ -36,6 +37,24 @@ function Get-StopWatch {
 # Start Logging
 Get-ChildItem -Path "$workingDir/*.log" | Remove-Item -Force # Delete previous Logs
 Start-Transcript -Path "$workingDir\reolink_$((Get-Date).ToString('yyyyMMdd-HHmmss')).log" -UseMinimalHeader | Out-Null
+
+# Check Font
+if (!(Get-ChildItem $WatermarkFont -ErrorAction SilentlyContinue)) {
+
+    Write-Warning "Watermark Font is missing! Trying to Install Font ..." -WarningAction Continue
+    try {
+        wget -c $fontDownloadUrl -O "$workingDir/Roboto.zip"
+    }
+    catch {
+        throw "[ERROR] while downlading Font '': $($_.Exception).Message)"
+    }
+    
+    if ($?) {
+        Expand-Archive -Path "$workingDir/Roboto.zip" -DestinationPath "$workingDir/Roboto" -Force
+        Remove-Item -Path "$workingDir/Roboto.zip" -Force
+        Write-Output "[OK] Installation of Watermark-Font was successful!"
+    }
+}
 
 #region KILL AREA
 $KillDate = (Get-Date).AddDays(-$KillDays)
