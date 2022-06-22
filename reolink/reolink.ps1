@@ -1,6 +1,6 @@
 <# 
 .SYNOPSIS Script to convert Reolink Videos with ffmpeg
-.NOTES Author: Tobias Steiner, Date: 13.06.2022
+.NOTES Author: Tobias Steiner, Date: 22.06.2022
 #>
 
 #region staticVariables
@@ -78,10 +78,10 @@ else {
 #endregion
 
 #region CONVERT AREA
-$AllItems = Get-ChildItem $BaseDir -Recurse -Force | Where-Object { $_.Extension -Like ".mp4" -and $_.FullName -notlike "*_low.mp4" }
+$AllItems = Get-ChildItem $BaseDir -Recurse -Force | Where-Object { $_.Extension -Like ".mp4" -and $_.FullName -notlike "*_low.mp4" } | Sort-Object -Property Name
 Write-Output "[TRANSCODING] '$($AllItems.Count)' total Videos found to check!"
 
-$AllItems | Sort-Object -Property Name | ForEach-Object -Parallel {
+$AllItems | ForEach-Object {
 
     # Generate Variables
     $OutputPath = $_.DirectoryName + "/_low/"
@@ -90,37 +90,38 @@ $AllItems | Sort-Object -Property Name | ForEach-Object -Parallel {
     $WatermarkText = "[LowRes] " + $_.FullName
 
     # Check for already converted Files
-    if ( $Mediainfo.OverallBitRate ) {
-
+    if ( $Mediainfo.OverallBitRate -and $Mediainfo ) {
         Write-Output "[TRANSCODING] [OK] Video '$OutputFullPath' already converted! Skip Process ..."
-        Exit
     }
-    elseif ( $Mediainfo -and !$Mediainfo.OverallBitRate) {
+    else {
+
+        if ( $Mediainfo -and !$Mediainfo.OverallBitRate) {
+            Write-Warning "[TRANSCODING] '$OutputFullPath' exist, but corrupt! Encoding again!" -WarningAction Continue
+        }
+        else {
+            Write-Output "[TRANSCODING] Start transcoding '$($_.FullName)' ..."
+        }
         
-        Write-Warning "[TRANSCODING] '$OutputFullPath' exist, but corrupt! Encoding again!" -WarningAction Continue
-    }
+        if (!(Test-Path -Path $OutputPath)) {
+            New-Item -ItemType Directory -Path ($_.DirectoryName + "/_low/") -Force | Out-Null
+        }
 
-    Write-Output "[TRANSCODING] Start transcoding '$($_.FullName)' ..."
+        ffmpeg -i $($_.FullName) `
+            -c:v libx264 `
+            -vf scale=720:-1 `
+            -vf "scale=720:-1, drawtext=fontfile='$WatermarkFont':text='$WatermarkText':x=10:y=H-th-10:fontsize='15':fontcolor=white:shadowcolor=black:shadowx=-3:shadowy=3:" `
+            -preset $TranscodingMode `
+            -crf 24 `
+            -c:a aac `
+            -b:a 32k `
+            $OutputFullPath `
+            -y `
+            -loglevel error
 
-    if (!(Test-Path -Path $OutputPath)) {
-        New-Item -ItemType Directory -Path ($_.DirectoryName + "/_low/") -Force | Out-Null
-    }
-
-    ffmpeg -i $($_.FullName) `
-        -c:v libx264 `
-        -vf scale=720:-1 `
-        -vf "scale=720:-1, drawtext=fontfile='$WatermarkFont':text='$WatermarkText':x=10:y=H-th-10:fontsize='15':fontcolor=white:shadowcolor=black:shadowx=-3:shadowy=3:" `
-        -preset $using:TranscodingMode `
-        -crf 24 `
-        -c:a aac `
-        -b:a 32k `
-        $OutputFullPath `
-        -y `
-        -loglevel error
-
-    if ($?) { 
-        $Mediainfo = (mediainfo --output=JSON $OutputFullPath | ConvertFrom-Json).media.track
-        Write-Output "[TRANSCODING] [OK] Transcoding into '$($Mediainfo.Format)' was successful!" 
+        if ($?) { 
+            $Mediainfo = (mediainfo --output=JSON $OutputFullPath | ConvertFrom-Json).media.track
+            Write-Output "[TRANSCODING] [OK] Transcoding into '$($Mediainfo.Format)' was successful!" 
+        }
     }
 }
 #endregion
