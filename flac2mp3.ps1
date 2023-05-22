@@ -1,7 +1,7 @@
 <# 
 .SYNOPSIS Flac to Mp3 Converter. Requires ffmpeg
 .DESCRIPTION 
-.NOTES Author: Gill Bates, Last Update: 18.06.2022
+.NOTES Author: Gill Bates, Last Update: 22.05.2023
 #>
 function Flac2Mp3 {
     param (
@@ -16,7 +16,8 @@ function Flac2Mp3 {
     $ErrorActionPreference = 'Continue'
 
     if (!$ffmpegCheck) {
-        throw "[ERROR] ffmpeg is missing! Install Binary and try again."
+        
+        throw "[ERROR] ffmpeg binary is missing! Install Binary and try again. Download latest Binary here: https://www.gyan.dev/ffmpeg/builds"
     }
 
     if ($Recurse) { $AllFiles = Get-ChildItem -Path $Path -Recurse } else {
@@ -35,7 +36,7 @@ function Flac2Mp3 {
             $TextInfo = (Get-Culture).TextInfo
             $FileName = $_.BaseName.substring(2) -replace '_', ' ' -replace "and", "&"
             $newCamelCase = ($TextInfo.ToTitleCase($FileName)).Trim("-") -replace "Feat ", "feat. "
-            $OutputFileName = "$OutputDir\$newCamelCase.mp3"
+            $OutputFileName = "$OutputDir\" + ($newCamelCase).Trim() + ".mp3"
         }
         else {
             $OutputFileName = "$OutputDir\$($_.BaseName).mp3"
