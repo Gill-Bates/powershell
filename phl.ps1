@@ -11,6 +11,9 @@
 [string]$iflxServer = "https://iflx.cloudheros.de"
 [string]$database = "phl"
 [string]$measureGroupName = "phlapi"
+[string]$userName = 'phluser'
+[securestring]$userPassword = ConvertTo-SecureString "****" -AsPlainText -Force
+[pscredential]$influxCred = New-Object System.Management.Automation.PSCredential ($userName, $userPassword)
 
 ###################### FUNCTIONS AREA ###################### 
 ############################################################ 
@@ -105,10 +108,19 @@ Write-Output "[$(Get-Logtime)] [INFO] Writing Data into InfluxDB '$iflxServer' .
 $apiResult | ForEach-Object {
 
     Write-Output "[$(Get-Logtime)] [$count/$($apiResult.count)] ---> '$($_.name)' ---> | Status: $([string]$_.status) | WaitTime: $([int]$_.waitTime) Min" | Format-Wide
-    Write-Influx -Measure $measureGroupName -Database $database -Server $iflxServer -Tags @{ride = $_.name } -Timestamp $_.lastUpdated -Metrics @{
+    
+    Write-Influx -Database $database `
+        -Server $iflxServer `
+        -Credential $influxCred `
+        -Measure $measureGroupName `
+        -Tags @{ride = $_.name } `
+        -Timestamp $_.lastUpdated `
+        -Metrics @{
+
         ride     = $_.name
         status   = [string]$_.status
         waitTime = [int]$_.waitTime
+
     }
     $count++
 }
