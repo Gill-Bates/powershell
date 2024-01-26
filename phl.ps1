@@ -9,11 +9,10 @@
 #Requires -Module Influx
 
 [string]$iflxServer = "https://iflx.cloudheros.de"
+[string]$logPath = "/var/log/phlapi.log"
 [string]$database = "phl"
 [string]$measureGroupName = "phlapi"
-[string]$userName = 'phluser'
-[securestring]$userPassword = ConvertTo-SecureString "****" -AsPlainText -Force
-[pscredential]$influxCred = New-Object System.Management.Automation.PSCredential ($userName, $userPassword)
+[string]$credentialFile = "./phlcredentials.xml"
 
 ###################### FUNCTIONS AREA ###################### 
 ############################################################ 
@@ -93,6 +92,21 @@ function Get-PhlWaitTime2 {
 ###################### PROGRAM AREA ###################### 
 ########################################################## 
 
+$null = Start-Transcript -Path $logPath -UseMinimalHeader
+
+# Checking for Password
+if ( !(Test-Path -Path $credentialFile) ) {
+    Write-Warning "`n*** Password-File '$credentialFile' missing! Please provide InfluxDB-Credentails! ***" -WarningAction Continue
+    Get-Credential | Export-Clixml $credentialFile
+    $influxCredentials = Import-Clixml -Path $credentialFile
+}
+else {
+    $influxCredentials = Import-Clixml -Path $credentialFile
+    if ($?) {
+        Write-Output "`n[$(Get-Logtime)] [OK] InfluxDB-Credentails successfully loaded!"
+    }
+}
+
 # Check if the Park is open
 if (! (Get-ParkStatus) ) {
     throw "[ERROR] Sorry, but the Park is currently closed!"
@@ -102,7 +116,7 @@ if (! (Get-ParkStatus) ) {
 $apiResult = Get-PhlWaitTime2
 
 # Processing Records
-Write-Output "[$(Get-Logtime)] [INFO] Writing Data into InfluxDB '$iflxServer' ..."
+Write-Output "[$(Get-Logtime)] [INFO] Writing Data into InfluxDB '$iflxServer' ...`n"
 
 [int]$count = 1
 $apiResult | ForEach-Object {
@@ -111,7 +125,7 @@ $apiResult | ForEach-Object {
     
     Write-Influx -Database $database `
         -Server $iflxServer `
-        -Credential $influxCred `
+        -Credential $influxCredentials `
         -Measure $measureGroupName `
         -Tags @{ride = $_.name } `
         -Timestamp $_.lastUpdated `
@@ -125,5 +139,6 @@ $apiResult | ForEach-Object {
     $count++
 }
 
-if ($?) { Write-Output "[$(Get-Logtime)] [OK] Scan completed. Bye!" }
+if ($?) { Write-Output "`n[$(Get-Logtime)] [OK] Scan completed. Bye!" }
+$null = Stop-Transcript
 Exit
