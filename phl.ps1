@@ -18,11 +18,29 @@
 ############################################################ 
 
 function Get-Logtime {
-    # Using only UTC due to different OS-Platform issues
-    return ([System.DateTime]::UtcNow).ToString('yyyy-MM-dd HH:mm:ss') + " UTC"
+    # This function is optimzed for Azure Automation!
+    $Timeformat = "yyyy-MM-dd HH:mm:ss" #yyyy-MM-dd HH:mm:ss.fff
+    if ((Get-Timezone).Id -ne "W. Europe Standard Time") {
+        try {
+            $tDate = (Get-Date).ToUniversalTime()
+            $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById("W. Europe Standard Time")
+            $TimeZone = [System.TimeZoneInfo]::ConvertTimeFromUtc($tDate, $tz)
+            return $(Get-Date -Date $TimeZone -Format $Timeformat)
+        }
+        catch {
+            return $(Get-Date -Format $Timeformat)
+        }
+    }
+    return $(Get-Date -Format $Timeformat)
 }
+
 function Get-ParkStatus {
-    return Invoke-RestMethod -Method GET -Uri "https://api.phlsys.de/api/park-infos"
+    try {
+        return Invoke-RestMethod -Method GET -Uri "https://api.phlsys.de/api/park-infos"
+    }
+    catch {
+        throw "[ERROR] while fetching Park Status from 'https://api.phlsys.de': $($_.Exception.Message)!"
+    }
 }
 
 # themeparks.wiki
@@ -108,7 +126,7 @@ else {
 }
 
 # Check if the Park is open
-if (! (Get-ParkStatus) ) {
+if (! ((Get-ParkStatus).isOpen) ) {
     throw "[ERROR] Sorry, but the Park is currently closed!"
 }
 
