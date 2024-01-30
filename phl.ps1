@@ -139,7 +139,7 @@ Write-Output "[$(Get-Logtime)] [INFO] Writing Data into InfluxDB '$iflxServer' .
 [int]$count = 1
 $apiResult | ForEach-Object {
 
-    Write-Output "[$(Get-Logtime)] [$count/$($apiResult.count)] ---> '$($_.name)' ---> | Status: $([string]$_.status) | WaitTime: $([int]$_.waitTime) Min" | Format-Wide
+    Write-Output "[$(Get-Logtime)] [$count/$($apiResult.count)] ---> '$($_.name)' ---> | Status: $([string]$_.status) | WaitTime: $([int]$_.waitTime) Min"
     
     Write-Influx -Database $database `
         -Server $iflxServer `
