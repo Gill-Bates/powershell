@@ -13,6 +13,7 @@
 [string]$database = "phl"
 [string]$measureGroupName = "phlapi"
 [string]$credentialFile = "./phlcredentials.xml"
+[bool]$skipParkOpeningCheck = $true
 
 ###################### FUNCTIONS AREA ###################### 
 ############################################################ 
@@ -126,7 +127,7 @@ else {
 }
 
 # Check if the Park is open
-if (! ((Get-ParkStatus).isOpen) ) {
+if (! ((Get-ParkStatus).isOpen) -and !$skipParkOpeningCheck ) {
     throw "[ERROR] Sorry, but the Park is currently closed!"
 }
 
