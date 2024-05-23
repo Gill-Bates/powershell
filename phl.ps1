@@ -1,5 +1,6 @@
 #!/usr/bin/env powershell
-# Cron 0 * * * * pwsh -File "/root/phl.ps1"
+# Cron every 15 Min
+# */15 * * * * pwsh -File "/root/phl.ps1"
 
 <# 
 .SYNOPSIS Phl Waitingtime Processor
@@ -153,7 +154,6 @@ $apiResult | ForEach-Object {
         ride     = $_.name
         status   = [string]$_.status
         waitTime = [int]$_.waitTime
-
     }
     $count++
 }
