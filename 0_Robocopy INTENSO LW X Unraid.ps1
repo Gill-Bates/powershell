@@ -2,13 +2,13 @@
 .SYNOPSIS
     Backup Tool for Robocopy by Fother Mucker
 .NOTES
-    Last Update: 21.03.2023
+    Last Update: 30.05.2024
 #>
 
 #region staticVariables
 [string]$source = "\\10.10.0.10\share"
 [string]$dest = "X:\_Unraid"
-[int]$multiThread = 4 # MultiThread
+[int]$multiThread = 3 # MultiThread
 [string]$logFolder = $dest.Split("_")[0] + "_Logs"
 $PSDefaultParameterValues = @{ '*:Encoding' = 'utf8' }
 #endregion
@@ -44,14 +44,14 @@ if (!(Test-Path -Path $logFolder)) {
         
   try {
     Write-Output "[$(Get-Logtime)] [INFO] Folder for Logfiles missing! Creating Folder '$logFolder' now ..."
-    New-Item -Path $logFolder -ItemType "directory" | Out-Null
+    $null = New-Item -Path $logFolder -ItemType "directory"
   }
   catch {
     throw "[ERROR] Can't create Folder '$logFolder': $($_.Exception.Message)!"
   }
 }
 else {
-  Write-Output "[$(Get-Logtime)] [OK] Folder exist! Proceed ..."
+  Write-Output "[$(Get-Logtime)] [OK]   Folder exist! Proceed ..."
 }
 
 
@@ -61,7 +61,7 @@ if (!$Drive) {
   throw "[ERROR] Drive not found or is not mounted as removable Drive. Check your Settings and try again!"
 }
 else {
-  Write-Output "[$(Get-Logtime)] [OK]   Drive '$($Drive.Label)' found with max. Capacity of '$([math]::round($Drive.Capacity /1TB,2)) TB'!"
+  Write-Output "[$(Get-Logtime)] [OK]   Drive '$($Drive.Label)' found with max. Capacity of '$([math]::round($Drive.Capacity /1TB,1)) TB'!"
 }
 
 Write-Output "[$(Get-Logtime)] [INFO] Starting Robocopy with '$multiThread' parallel Threads now ..."
