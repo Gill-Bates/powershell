@@ -11,6 +11,9 @@
 [int]$multiThread = 3 # MultiThread
 [string]$logFolder = $dest.Split("_")[0] + "_Logs"
 [string]$gitReposLocation = "D:\_Repo" # Backup Location
+[array]$excludeDirectories = @(
+  $source + "\_CCTV"
+)
 #endregion
 
 #region functions
@@ -70,14 +73,15 @@ else {
 }
 
 Write-Output "[$(Get-Logtime)] [INFO] Starting Robocopy with '$multiThread' parallel Threads now ..."
+Write-Warning "[$(Get-Logtime)] Ignoring Directories: '$($excludeDirectories -join ", ")'!" -WarningAction Continue
 
 #region Unraid Backup
-Robocopy.exe $source $dest /MIR /TEE /COPY:DAT /DCOPY:T /MT:$mt /LOG+:"$logFolder\$(Get-Date -Format yyyy-MM-dd)`_Backup.log"
+Robocopy.exe $source $dest /MIR /TEE /COPY:DAT /DCOPY:T /MT:$mt /XD $excludeDirectories /LOG+:"$logFolder\$(Get-Date -Format yyyy-MM-dd)`_Backup.log"
+
 if ($?) {
   Write-Output "[$(Get-Logtime)] [OK] Robocopy Backup finished successfully!"
 }
 #endregion
-
 
 #region Create Backup from Git Repos
 $allRepos = Get-ChildItem -Path $gitReposLocation
