@@ -10,7 +10,7 @@
 [string]$dest = "X:\_Unraid"
 [int]$multiThread = 3 # MultiThread
 [string]$logFolder = $dest.Split("_")[0] + "_Logs"
-[string]$gitReposLocation = "D:\_Repo"
+[string]$gitReposLocation = "D:\_Repo" # Backup Location
 #endregion
 
 #region functions
@@ -39,9 +39,15 @@ if ($Question -notlike "y") {
   Exit
 }
 
+# Asking for Shutdown
+[string]$shutdown = Read-Host "[$(Get-Logtime)] [INFO] Shutdown after finishing? (y/n)?"
+
+if ($shutdown -notlike "y" -or $shutdown -notlike "n") {
+  Write-Output "[$(Get-Logtime)] [INFO] Wrong Answer! Ignoring Shutdown!"
+}
+
 # Check for Logfile Folder
 if (!(Test-Path -Path $logFolder)) {
-        
   try {
     Write-Output "[$(Get-Logtime)] [INFO] Folder for Logfiles missing! Creating Folder '$logFolder' now ..."
     $null = New-Item -Path $logFolder -ItemType "directory"
@@ -53,7 +59,6 @@ if (!(Test-Path -Path $logFolder)) {
 else {
   Write-Output "[$(Get-Logtime)] [OK]   Folder exist! Proceed ..."
 }
-
 
 # Checking for Backup Drive
 $Drive = Get-WmiObject Win32_Volume -Filter ("DriveType={0}" -f [int][System.IO.DriveType]::Removable) | Where-Object { $_.Name -Like $dest.Split("_")[0] }
@@ -89,5 +94,10 @@ $allRepos | ForEach-Object {
 
 if ($?) {
   Write-Output "`n[$(Get-Logtime)] [OK] All Backup Operations done. Exit here!"
+}
+
+if ($shutdown -like "y") {
+  Write-Output "[$(Get-Logtime)] Shutdown Computer now ..."
+  Stop-Computer -Force
 }
 #Exit
