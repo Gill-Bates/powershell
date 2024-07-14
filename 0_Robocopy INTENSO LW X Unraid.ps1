@@ -10,7 +10,7 @@
 [string]$dest = "X:\_Unraid"
 [int]$multiThread = 3 # MultiThread
 [string]$logFolder = $dest.Split("_")[0] + "_Logs"
-$PSDefaultParameterValues = @{ '*:Encoding' = 'utf8' }
+[string]$gitReposLocation = "D:\_Repo"
 #endregion
 
 #region functions
@@ -66,9 +66,26 @@ else {
 
 Write-Output "[$(Get-Logtime)] [INFO] Starting Robocopy with '$multiThread' parallel Threads now ..."
 
-# Start Backup
+#region Unraid Backup
 Robocopy.exe $source $dest /MIR /TEE /COPY:DAT /DCOPY:T /MT:$mt /LOG+:"$logFolder\$(Get-Date -Format yyyy-MM-dd)`_Backup.log"
-#Robocopy.exe $source $dest /MIR /TEE /FFT /DCOPY:T /MT`:$MultiTreaths /A-:SH # Preserve existing Timestamp!
+if ($?) {
+  Write-Output "[$(Get-Logtime)] [OK] Robocopy Backup finished successfully!"
+}
+#endregion
+
+
+#region Create Backup from Git Repos
+$allRepos = Get-ChildItem -Path $gitReposLocation
+Write-Output "[$(Get-Logtime)] [INFO] Starting git Backup of '$(($allRepos).Count)' Repositories ..."
+[int]$count = 1
+$allRepos | ForEach-Object {
+
+  Write-Output "[$(Get-Logtime)] [$count/$(($allRepos).Count)] [INFO] Backing up '$($_.Name)' ..."
+  Set-Location $_.Fullname
+  git bundle create ("X:\_Repos\" + $(Get-Date -Format yyyy-MM-dd) + "_" + $($_.Name) + ".bundle") --all
+  $count++
+}
+#endregion
 
 if ($?) {
   Write-Output "`n[$(Get-Logtime)] [OK] All Backup Operations done. Exit here!"
