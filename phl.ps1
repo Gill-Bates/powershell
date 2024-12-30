@@ -170,9 +170,8 @@ $parkStatus = Get-ParkStatus
 if (!($parkStatus.isOpen)) {
 
     Write-Warning "Park is currently CLOSED :-( (Closed at '$([datetime]$parkStatus.close)')" -WarningAction Continue
-    
-    Write-ParkState
-    
+   
+   
     if ($?) { Write-Output "[$(Get-Logtime)] [OK]   Scan completed. Bye!" }
     $null = Stop-Transcript
     Exit
