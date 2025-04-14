@@ -2,7 +2,7 @@
 .SYNOPSIS
     Backup Tool for Restic by Fother Mucker
 .NOTES
-    Last Mdified: 06.01.2025
+    Last Mdified: 2025-02-15
 #>
 
 # Requires -RunAsAdministrator
@@ -66,6 +66,8 @@ function Set-DefenderSettings {
   
 }
 #endregion  
+
+#Start-Transcript -UseMinimalHeader -Path $logFolder
 
 #region header
 Clear-Host
@@ -132,11 +134,10 @@ Write-Host "[$(Get-Logtime)] [INFO] Found total '$($allSnapshots.Count)' Snapsho
 #region Check Repo Health
 Write-Host "[$(Get-Logtime)] [INFO] Checking Health of Repo. Please wait ...`n" -ForegroundColor DarkCyan
 restic check
-restic prune
 #endregion
 
 #region Disable Defender
-Write-Host "`n[$(Get-Logtime)] [INFO] --------> Disable Defender now ..." -ForegroundColor DarkCyan
+#Write-Host "`n[$(Get-Logtime)] [INFO] --------> Disable Defender now ..." -ForegroundColor DarkCyan
 #Set-DefenderSettings -Off
 #endregion
 
@@ -148,6 +149,13 @@ restic backup $source `
     --exclude $excludeDirectories `
     --cleanup-cache `
     --verbose
+#endregion
+
+#region Prune
+Write-Host "`n[$(Get-Logtime)] [INFO] Performing Cleanup Tasks ..." -ForegroundColor DarkCyan
+restic forget `
+    --keep-daily 365 `
+    --prune
 #endregion
 
 if ($?) {
