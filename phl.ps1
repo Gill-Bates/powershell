@@ -5,7 +5,7 @@
 <# 
 .SYNOPSIS Phl Waitingtime Processor
 .DESCRIPTION 
-.NOTES Author: Gill Bates, Last Update: 28.06.2024
+.NOTES Author: Gill Bates, Last Update: 2025-04-13
 #>
 
 #Requires -Module Influx
@@ -14,11 +14,10 @@
 [string]$bucket = "phl"
 [string]$org = "myOrg"
 [string]$iflxServer = "https://iflx2.cloudheros.de" # InfluxDB v2
-[string]$iflxToken = "ikLgCOW3aSXKFeZbssM11Lnc0G9c6XmoIMfQkFA8PvLmwIwOAc7BYki2M1_ur0xH-lGHiMrrru-oecXGItTJRw=="
+[string]$iflxToken = "Xh3FS2OrhouwIUXmycGYtcHx1QdQ-kOZWC8zbImdW6TOsXFj-9KZD3lJeZAzQGNBvHTUecDnntCPoZHHT40-Ng=="
 
-# Only required if secure Password Store is used
-# [string]$scriptPath = (Get-Location).Path
-# [string]$iflxTokenFile = "iflxToken.xml"
+# Set TLS Version
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
 
 ###################### FUNCTIONS AREA ###################### 
 ############################################################ 
@@ -49,36 +48,10 @@ function Get-ParkStatus {
     }
 }
 
-# themeparks.wiki
-function Get-PhlWaitTime1 {
-
-    Write-Information "[$(Get-Logtime)] [INFO] Fetching Data from 'themeparks.wiki' ..." -InformationAction Continue
-
-    try {
-        $query = (Invoke-RestMethod -Method GET -Uri "https://api.themeparks.wiki/v1/entity/phantasialand/live").liveData | Where-Object { $_.entityType -like "attraction" }
-    }
-    catch {
-        throw "[ERROR] while fetching Waiting Time from 'themeparks.wiki': $($_.Exception.Message)!"
-    } 
-
-    $obj = @()
-    $query | ForEach-Object {
-
-        $obj += [PSCustomObject]@{
-            lastUpdated = [datetime](Get-Date -Format o ($_.lastUpdated ))
-            name        = $_.name
-            status      = ($_.status).ToLower()
-            waitTime    = [int]$_.queue.standby.waitTime
-        }
-    }
-    Write-Information "[$(Get-Logtime)] [INFO] Received Data of '$(($obj).Count)' Rides!" -InformationAction Continue
-    return $obj | Sort-Object Name
-}
-
 # wartezeiten.app
-function Get-PhlWaitTime2 {
+function Get-PhlWaitTime {
 
-    Write-Information "[$(Get-Logtime)] [INFO] Fetching Data from 'wartezeiten.app' ..." -InformationAction Continue
+    Write-Information "[INFO] Fetching Data from 'wartezeiten.app' ..." -InformationAction Continue
 
     try {
         $Header = @{
@@ -91,7 +64,7 @@ function Get-PhlWaitTime2 {
             "Method"  = "GET"
             "Headers" = $Header
         }
-        $query = (Invoke-RestMethod @Params -SslProtocol Tls12) | Group-Object Name  
+        $query = (Invoke-RestMethod @Params) | Group-Object Name  
     }
     catch {
         throw "[ERROR] while fetching Waiting Time from 'wartezeiten.app': $(($_.Exception).Message)!"
@@ -109,13 +82,11 @@ function Get-PhlWaitTime2 {
         }
     }
 
-    Write-Information "[$(Get-Logtime)] [INFO] Received Data of '$(($obj).Count)' Rides!" -InformationAction Continue
+    Write-Information "[INFO] Received Data of '$(($obj).Count)' Rides!" -InformationAction Continue
     return $obj | Sort-Object ride
 }
 
 function Write-ParkState {
-
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 # Set TLS Version
 
     try {
         Write-Influx -Server $iflxServer `
@@ -140,29 +111,6 @@ function Write-ParkState {
 ########################################################## 
 
 $null = Start-Transcript -Path $logPath -UseMinimalHeader
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 # Set TLS Version
-
-#region currentlyBroken
-# Checking for iflxTokenFile
-# Write-Output "[$(Get-Logtime)] [INFO] Checking if Password File for Influxdb-Token exists ..."
-
-# if (!(Test-Path -Path (Join-Path -Path $scriptPath $iflxTokenFile))) {
-    
-#     Write-Warning "*** iflxTokenFile '$iflxTokenFile' missing! ***" -WarningAction Continue
-#     $bucketToken = Read-Host -AsSecureString -Prompt "Enter Bucket Token for '$bucket'" 
-#     $Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $bucket, $bucketToken
-#     $Credential | Export-Clixml $iflxTokenFile
-
-#     if ($?) {
-#         Write-Output "[$(Get-Logtime)] [OK]   iflxTokenFile successfully created! Proceed ..."
-#     }
-# }
-# Loading Password
-# $influxCredential = Import-Clixml -Path $iflxTokenFile
-# $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($($influxCredential.Password))
-# $UnsecurePassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
-# [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
-#endregion
 
 # Check if the Park is open and processing Park Status Result
 $parkStatus = Get-ParkStatus
@@ -170,53 +118,59 @@ $parkStatus = Get-ParkStatus
 if (!($parkStatus.isOpen)) {
 
     Write-Warning "Park is currently CLOSED :-( (Closed at '$([datetime]$parkStatus.close)')" -WarningAction Continue
-   
-   
-    if ($?) { Write-Output "[$(Get-Logtime)] [OK]   Scan completed. Bye!" }
+        
+    if ($?) { Write-Output "[OK]   Scan completed. Bye!" }
     $null = Stop-Transcript
     Exit
 }
 else {
-    Write-Output "[$(Get-Logtime)] [INFO] Park is OPEN :-) Write parkState Data into InfluxDB: '$iflxServer' ..."
+    Write-Output "[INFO] Park is OPEN :-) Write parkState Data into InfluxDB: '$iflxServer' ..."
     Write-ParkState
 }
 
 # Fetch current WaitingTime for all available Rides
-$apiResult = Get-PhlWaitTime2
+$apiResult = Get-PhlWaitTime
 
 # Processing Records
-Write-Output "[$(Get-Logtime)] [INFO] Writing Data into InfluxDB '$iflxServer' ...`n"
+Write-Output "[INFO] Writing Data into InfluxDB '$iflxServer' ...`n"
 
 [int]$count = 1
 $apiResult | ForEach-Object {
 
-    Write-Output "[$(Get-Logtime)] [$count/$($apiResult.count)] ---> '$($_.ride)' ---> | Status: $([string]$_.status) | WaitTime: $([int]$_.waitTime) Min."
+    $rideName = $_.name
+    $status = $_.status
+    $wait = try { [int]$_.waitingtime } catch { $null }
 
+    Write-Output "---> '$rideName' | Status: $status | WaitTime: $wait Min."
+
+    # 1️⃣ Write Status (open, closed, etc.)
     Write-Influx -Server $iflxServer `
         -Bucket $bucket `
         -Organisation $org `
         -Token $iflxToken `
         -Timestamp $_.lastUpdated `
-        -Measure waitTime `
-        -Metrics @{
-        status  = [string]$_.status
-        $_.ride = [int]$_.waitTime
+        -Measure "rideState" `
+        -Tags @{ ride = $rideName } `
+        -Metrics @{ status = $status }
+
+    # 2️⃣ Write WaitTime (in minutes)
+    if ($wait -ne $null) {
+        Write-Influx -Server $iflxServer `
+            -Bucket $bucket `
+            -Organisation $org `
+            -Token $iflxToken `
+            -Timestamp $_.lastUpdated `
+            -Measure "waitTime" `
+            -Tags @{ ride = $rideName } `
+            -Metrics @{ waitTime = $wait }
     }
 
-    Write-Influx -Server $iflxServer `
-        -Bucket $bucket `
-        -Organisation $org `
-        -Token $iflxToken `
-        -Timestamp $_.lastUpdated `
-        -Measure rideState `
-        -Metrics @{
-        $_.ride = [string]$_.status
-    }
     $count++
 }
 
 # Finishing
-if ($?) { Write-Output "[$(Get-Logtime)] [OK]   Scan completed. Bye!" }
+if ($?) { Write-Output "[OK]   Scan completed. Bye!" }
 $null = Stop-Transcript
+
 Exit
 # End of Script

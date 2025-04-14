@@ -89,7 +89,7 @@ Write-Host "[INFO] Setting Env-Variables ..." -ForegroundColor DarkCyan
 [string]$Env:RESTIC_PASSWORD_FILE = $repoPasswordFile
 [string]$Env:RESTIC_COMPRESSION = "auto"
 [string]$Env:RESTIC_CACHE_DIR = (Join-Path $env:TEMP "Restic")
-#[string]$Env:RESTIC_READ_CONCURRENCY = 10 # Default: 2
+[string]$Env:RESTIC_READ_CONCURRENCY = 10 # Default: 2
 #endregion
 
 #region Asking for Mouting
@@ -146,7 +146,7 @@ Write-Host "[$(Get-Logtime)] [INFO] Starting Backup now ..." -ForegroundColor Da
 Write-Host "[$(Get-Logtime)] [INFO] Ignoring Directories: '$($excludeDirectories -join ", ")'!`n" -ForegroundColor DarkCyan
 
 restic backup $source `
-    --exclude $excludeDirectories `
+    --exclude "\_CCTV" `
     --cleanup-cache `
     --verbose
 #endregion
