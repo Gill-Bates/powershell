@@ -1,135 +1,163 @@
 <#
 .SYNOPSIS
-    Backup Tool for Restic by Fother Mucker
+    Enhanced Restic Backup Script with better error handling
+.DESCRIPTION
+    Performs backups using Restic with comprehensive error handling and logging
 .NOTES
-    Last Mdified: 2025-04-25
+    Last Modified: 2025-04-28
+    Author: Fother Mucker (enhanced)
 #>
 
 #Requires -PSEdition Core
 
-#region staticVariables
-[string]$source = "Z:\" # Don't use \\10.10.0.10\share - will not work with the Restic GUI
-[string]$resticRepo = "X:\_Restic\Repository\unraid" # Root Folder for all Repositories managed by restic
+#region Configuration
+[string]$source = "Z:\"
+[string]$resticRepo = "X:\_Restic\Repository\unraid"
 [string]$repoPasswordFile = "X:\_Restic\Password\unraid.txt"
 [string]$logFolder = $resticRepo.Split("_")[0] + "_Logs"
 [string]$logPath = Join-Path $logFolder ("restic_backup_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".log")
-[string]$gitReposLocation = "X:\_Repos" # Backup Target Location
 [array]$excludeDirectories = @(
     "\_CCTV"
 ) | Sort-Object
+
+# Restic environment settings
+$resticEnv = @{
+    "RESTIC_REPOSITORY"       = $resticRepo
+    "RESTIC_PASSWORD_FILE"    = $repoPasswordFile
+    "RESTIC_COMPRESSION"      = "auto"
+    "RESTIC_CACHE_DIR"        = "X:\_Restic\cache"
+    "RESTIC_READ_CONCURRENCY" = 10
+}
+#endregion
+
+#region Functions
+function Get-Logtime {
+    return (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+}
+
+function Invoke-ResticCommand {
+    param (
+        [string]$Command,
+        [string[]]$Arguments,
+        [string]$OperationName
+    )
+
+    Write-Host "[$(Get-Logtime)] [INFO] Starting $OperationName..." -ForegroundColor DarkCyan
+    Write-Host "[$(Get-Logtime)] [CMD]  restic $Command $($Arguments -join ' ')" -ForegroundColor Gray
+
+    try {
+        $output = & "restic" $Command $Arguments 2>&1
+        
+        # Log all output
+        $output | ForEach-Object {
+            Write-Host "[$(Get-Logtime)] [RESTIC] $_" -ForegroundColor DarkGray
+        }
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Restic $OperationName failed with exit code $LASTEXITCODE"
+        }
+
+        Write-Host "[$(Get-Logtime)] [OK]   $OperationName completed successfully" -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Host "[$(Get-Logtime)] [ERROR] Failed to execute $OperationName" -ForegroundColor Red
+        Write-Host "[$(Get-Logtime)] [ERROR] $_" -ForegroundColor Red
+        return $false
+    }
+}
+
+function Show-Header {
+    Clear-Host
+    Write-Host "`n  ______            _"            -ForegroundColor Green
+    Write-Host "  | ___ \          | |               " -ForegroundColor Green
+    Write-Host "  | |_/ / __._  ___| | ___   _ _ __  " -ForegroundColor Green
+    Write-Host "  | ___ \/ _`  |/ __| |/ / | | | '_ \ " -ForegroundColor Green
+    Write-Host "  | |_/ / (_| | (__|   <| |_| | |_) |" -ForegroundColor Green
+    Write-Host "  \____/ \__,_|\___|_|\_\\__,_| .__/ " -ForegroundColor Green
+    Write-Host "                                | |    " -ForegroundColor Green
+    Write-Host "VeraCrypt Backuptool 2021-2025  |_|  pwsh v$($PSVersionTable.PSVersion.Major).$($PSVersionTable.PSVersion.Minor).$($PSVersionTable.PSVersion.Patch)"
+    Write-Host "        Running on Host: '$((hostname).ToUpper())'`n" -ForegroundColor Green
+}
 #endregion
 
 # Start Logging
+if (!(Test-Path $logFolder)) {
+    New-Item -ItemType Directory -Path $logFolder -Force | Out-Null 
+}
 $null = Start-Transcript -UseMinimalHeader -Path $logPath
 
-#region ENV Variables
-Write-Host "[INFO] Setting Env-Variables ..." -ForegroundColor DarkCyan
-$env:Path = "X:\_Restic;" + $env:Path # Path to Restic
-[string]$Env:RESTIC_REPOSITORY = $resticRepo
-[string]$Env:RESTIC_PASSWORD_FILE = $repoPasswordFile
-[string]$Env:RESTIC_COMPRESSION = "auto"
-[string]$Env:RESTIC_CACHE_DIR = (Join-Path $env:TEMP "Restic")
-[string]$Env:RESTIC_READ_CONCURRENCY = 10 # Default: 2
-#endregion
-
-#region functions
-function Get-Logtime {
-    $Timeformat = "yyyy-MM-dd HH:mm:ss"
-    return $(Get-Date -Format $Timeformat)
-}
-#endregion  
-
-#region header
-Clear-Host
-Write-Host "`n  ______            _"            -ForegroundColor Green
-Write-Host "  | ___ \          | |               " -ForegroundColor Green
-Write-Host "  | |_/ / __._  ___| | ___   _ _ __  " -ForegroundColor Green
-Write-Host "  | ___ \/ _`  |/ __| |/ / | | | '_ \ " -ForegroundColor Green
-Write-Host "  | |_/ / (_| | (__|   <| |_| | |_) |" -ForegroundColor Green
-Write-Host "  \____/ \__,_|\___|_|\_\\__,_| .__/ " -ForegroundColor Green
-Write-Host "                                | |    " -ForegroundColor Green
-Write-Host "VeraCrypt Backuptool 2021-2025  |_|  pwsh v$($PSVersionTable.PSVersion.Major).$($PSVersionTable.PSVersion.Minor).$($PSVersionTable.PSVersion.Patch)"
-Write-Host "        Running on Host: '$((hostname).ToUpper())'`n" -ForegroundColor Green
-#endregion
-
-restic version
-
-#region Asking for Mouting
-[string]$Question = Read-Host "`n[$(Get-Logtime)] [INFO] Drive already mounted with Letter 'X' [Y/n]?"
-
-if ($Question -and $Question -notlike "y") {
-    Write-Host "[$(Get-Logtime)] [INFO] Wrong Answer! Bye!" -ForegroundColor DarkCyan
-    Exit
-}
-#endregion
-
-#region Snapshots
-$allSnapshots = Get-ChildItem (Join-Path $resticRepo "snapshots")
-
-if ($allSnapshots) {
-    Write-Host "[$(Get-Logtime)] [INFO] Found total '$($allSnapshots.Count)' Snapshots (Last Backup from: $((($allSnapshots.LastWriteTime | Sort-Object -Descending)[0]).ToString("yyyy-MM-dd HH:mm:ss")))" -ForegroundColor DarkCyan
-}
-else {
-    Write-Host "[$(Get-Logtime)] [INFO] No Snapshot found! Maybe a new Repository?" -ForegroundColor DarkCyan
-}
-#endregion
-
-#region Check Repo Health
-Write-Host "[$(Get-Logtime)] [INFO] Checking Health of Repo. Please wait ...`n" -ForegroundColor DarkCyan
-restic check
-#endregion
-
-#region Backup
-Write-Host "`n[$(Get-Logtime)] [INFO] Starting Backup now ..." -ForegroundColor DarkCyan
-Write-Host "[$(Get-Logtime)] [INFO] Ignoring Directories: '$($excludeDirectories -join ", ")'!`n" -ForegroundColor DarkCyan
-
 try {
+    # Set environment variables
+    $env:Path = "X:\_Restic;" + $env:Path
+
+    foreach ($key in $resticEnv.Keys) {
+        Set-Item -Path "env:$key" -Value $resticEnv[$key]
+    }
+
+    Show-Header
+    
+    # Check restic version
+    Write-Host "[$(Get-Logtime)] [INFO] Restic Version:" -ForegroundColor DarkCyan
+    restic version
+    if ($LASTEXITCODE -ne 0) {
+        throw "Restic is not available or failed to execute"
+    }
+
+    # Verify mount
+    $question = Read-Host "`n[$(Get-Logtime)] [INFO] Drive already mounted with Letter 'X' [Y/n]?`n"
+    if ($question -and $question -notlike "y") {
+        throw "Mount verification failed. Aborting."
+    }
+
+    # Check existing snapshots
+    $allSnapshots = Get-ChildItem (Join-Path $resticRepo "snapshots") -ErrorAction SilentlyContinue
+    if ($allSnapshots) {
+        Write-Host "[$(Get-Logtime)] [INFO] Found $($allSnapshots.Count) snapshots (Last: $(($allSnapshots.LastWriteTime | Sort-Object -Descending)[0].ToString('yyyy-MM-dd HH:mm:ss')))" -ForegroundColor DarkCyan
+    }
+    else {
+        Write-Host "[$(Get-Logtime)] [INFO] No snapshots found - new repository?" -ForegroundColor DarkCyan
+    }
+
+    # Repository health check
+    $healthCheck = Invoke-ResticCommand -Command "check" -OperationName "Repository Health Check"
+    if (-not $healthCheck) {
+        throw "Repository health check failed"
+    }
+
+    # Backup operation
+    Write-Host "`n[$(Get-Logtime)] [INFO] Starting backup..." -ForegroundColor DarkCyan
+    Write-Host "[$(Get-Logtime)] [INFO] Excluding directories: $($excludeDirectories -join ', ')" -ForegroundColor DarkCyan
+
+    $excludeArgs = $excludeDirectories | ForEach-Object { "--exclude=$_" }
+    $backupArgs = @($source, "--cleanup-cache", "--verbose") + $excludeArgs
 
     $measure = Measure-Command {
-
-        $excludeArgs = @()
-        foreach ($dir in $excludeDirectories) {
-            $excludeArgs += "--exclude=$dir"
+        $backupSuccess = Invoke-ResticCommand -Command "backup" -Arguments $backupArgs -OperationName "Backup"
+        if (!$backupSuccess) {
+            throw "Backup failed"
         }
-
-        restic backup $source `
-            $excludeArgs `
-            --cleanup-cache `
-            --verbose
     }
 
-    if (LASTEXITCODE -eq 0) {
-        Write-Host "[$(Get-Logtime)] [OK]   Backup completed successfully in '$($measure.TotalMinutes)' Minutes!" -ForegroundColor Green
+    Write-Host "[$(Get-Logtime)] [INFO] Backup completed in $([math]::Round($measure.TotalMinutes, 2)) minutes" -ForegroundColor DarkCyan
+
+    # Prune operation
+    $pruneArgs = @("--keep-daily", "365", "--prune")
+    $pruneSuccess = Invoke-ResticCommand -Command "forget" -Arguments $pruneArgs -OperationName "Prune Operation"
+    if (-not $pruneSuccess) {
+        throw "Prune operation failed"
     }
-    else {
-        throw "Backup failed with exit code $LASTEXITCODE"
-    }
-    
-    # Prune
-    Write-Host "`n[$(Get-Logtime)] [INFO] Performing Cleanup Tasks ..." -ForegroundColor DarkCyan
-    
-    restic forget `
-        --keep-daily 365 `
-        --prune
-    
-    if (LASTEXITCODE -eq 0) {
-        Write-Host "[$(Get-Logtime)] [OK]   Prune completed successfully in '$($measure.TotalMinutes)' Minutes!" -ForegroundColor Green
-    }
-    else {
-        throw "Prune failed with exit code $LASTEXITCODE"
-    }
-    
-    Write-Host "[OK]   All Tasks completed successfully! Bye.`n" -ForegroundColor Green
+
+    Write-Host "`n[$(Get-Logtime)] [OK] All operations completed successfully" -ForegroundColor Green
 }
 catch {
-    Write-Host "ERROR: $_" -ForegroundColor Red
+    Write-Host "`n[$(Get-Logtime)] [ERROR] FATAL ERROR: $_" -ForegroundColor Red
+    Write-Host "[$(Get-Logtime)] [ERROR] Stack trace: $($_.ScriptStackTrace)" -ForegroundColor Red
     exit 1
 }
 finally {
+    $null = Stop-Transcript
     if ($?) {
-        Write-Host "`n[$(Get-Logtime)] [OK]   All Backup Jobs done. Exit here. Bye!" -ForegroundColor Green
-        $null = Stop-Transcript
+        Write-Host "`n[$(Get-Logtime)] [OK] Script completed successfully" -ForegroundColor Green
     }
 }
-#endregion
-# End of Script
