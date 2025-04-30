@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    Enhanced Restic Backup Script with better error handling and Ctrl+C support
+    Enhanced Restic Backup Script with better error handling
 .DESCRIPTION
-    Performs backups using Restic with comprehensive error handling, logging and Ctrl+C interrupt support
+    Performs backups using Restic with comprehensive error handling and logging
 .NOTES
-    Last Modified: 2025-04-30
+    Last Modified: 2025-04-28
     Author: Fother Mucker (enhanced)
 #>
 
@@ -15,7 +15,7 @@
 [string]$resticRepo = "X:\_Restic\Repository\unraid"
 [string]$repoPasswordFile = "X:\_Restic\Password\unraid.txt"
 [string]$logFolder = $resticRepo.Split("_")[0] + "_Logs"
-[string]$logPath = Join-Path $logFolder ("restic_backup_" + (Get-Date -Format "yyyy-MM-dd") + ".log")
+[string]$logPath = Join-Path $logFolder ("restic_backup_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".log")
 [array]$excludeDirectories = @(
     "\_CCTV"
 ) | Sort-Object
@@ -46,67 +46,15 @@ function Invoke-ResticCommand {
     Write-Host "[$(Get-Logtime)] [CMD]  restic $Command $($Arguments -join ' ')" -ForegroundColor Gray
 
     try {
-        # Start the process
-        $processInfo = New-Object System.Diagnostics.ProcessStartInfo
-        $processInfo.FileName = "restic"
-        $processInfo.Arguments = "$Command $($Arguments -join ' ')"
-        $processInfo.RedirectStandardOutput = $true
-        $processInfo.RedirectStandardError = $true
-        $processInfo.UseShellExecute = $false
-        $processInfo.CreateNoWindow = $true
-
-        $process = New-Object System.Diagnostics.Process
-        $process.StartInfo = $processInfo
-
-        # Setup Ctrl+C handler
-        [console]::TreatControlCAsInput = $false
-        $cancelRequested = $false
-
-        # Register the handler
-        $handler = [System.ConsoleCancelEventHandler] {
-            Write-Host "[$(Get-Logtime)] [WARN] Ctrl+C detected, attempting graceful shutdown..." -ForegroundColor Yellow
-            $cancelRequested = $true
-            $_.Cancel = $true  # Prevent the process from being terminated immediately
-        }
-        [Console]::add_CancelKeyPress($handler)
-
-        # Start the process
-        $null = $process.Start()
-
-        # Read output asynchronously
-        $outputBuilder = New-Object System.Text.StringBuilder
-        $errorBuilder = New-Object System.Text.StringBuilder
-
-        $outputTask = $process.StandardOutput.ReadToEndAsync()
-        $errorTask = $process.StandardError.ReadToEndAsync()
-
-        # Wait for process to exit with timeout checks
-        while (-not $process.WaitForExit(200)) {
-            if ($cancelRequested) {
-                Write-Host "[$(Get-Logtime)] [WARN] Sending interrupt to restic..." -ForegroundColor Yellow
-                $process.Kill()
-                throw "Operation cancelled by user"
-            }
+        $output = & "restic" $Command $Arguments 2>&1
+        
+        # Log all output
+        $output | ForEach-Object {
+            Write-Host "[$(Get-Logtime)] [RESTIC] $_" -ForegroundColor DarkGray
         }
 
-        # Wait for output to complete
-        $outputTask.Wait()
-        $errorTask.Wait()
-
-        # Process output
-        $output = $outputTask.Result
-        $error = $errorTask.Result
-
-        $output -split "`n" | ForEach-Object {
-            if ($_) { Write-Host "[$(Get-Logtime)] [RESTIC] $_" -ForegroundColor DarkGray }
-        }
-
-        $error -split "`n" | ForEach-Object {
-            if ($_) { Write-Host "[$(Get-Logtime)] [RESTIC-ERR] $_" -ForegroundColor DarkRed }
-        }
-
-        if ($process.ExitCode -ne 0) {
-            throw "Restic $OperationName failed with exit code $($process.ExitCode)"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Restic $OperationName failed with exit code $LASTEXITCODE"
         }
 
         Write-Host "[$(Get-Logtime)] [OK]   $OperationName completed successfully" -ForegroundColor Green
@@ -116,14 +64,6 @@ function Invoke-ResticCommand {
         Write-Host "[$(Get-Logtime)] [ERROR] Failed to execute $OperationName" -ForegroundColor Red
         Write-Host "[$(Get-Logtime)] [ERROR] $_" -ForegroundColor Red
         return $false
-    }
-    finally {
-        # Clean up the handler
-        if ($handler) {
-            try { [Console]::remove_CancelKeyPress($handler) } catch {}
-        }
-        # Ensure process is disposed
-        if ($process) { $process.Dispose() }
     }
 }
 
@@ -141,14 +81,13 @@ function Show-Header {
 }
 #endregion
 
+# Start Logging
+if (!(Test-Path $logFolder)) {
+    New-Item -ItemType Directory -Path $logFolder -Force | Out-Null 
+}
+$null = Start-Transcript -UseMinimalHeader -Path $logPath
+
 try {
-    # Start Logging
-    if (!(Test-Path $logFolder)) {
-        $null = New-Item -ItemType Directory -Path $logFolder -Force
-    }
-
-    $null = Start-Transcript -UseMinimalHeader -Path $logPath
-
     # Set environment variables
     $env:Path = "X:\_Restic;" + $env:Path
 
@@ -159,7 +98,7 @@ try {
     Show-Header
     
     # Check restic version
-    Write-Host "`n[$(Get-Logtime)] [INFO] Restic Version:" -ForegroundColor DarkCyan
+    Write-Host "[$(Get-Logtime)] [INFO] Restic Version:" -ForegroundColor DarkCyan
     restic version
     if ($LASTEXITCODE -ne 0) {
         throw "Restic is not available or failed to execute"
@@ -177,7 +116,7 @@ try {
         Write-Host "[$(Get-Logtime)] [INFO] Found $($allSnapshots.Count) snapshots (Last: $(($allSnapshots.LastWriteTime | Sort-Object -Descending)[0].ToString('yyyy-MM-dd HH:mm:ss')))" -ForegroundColor DarkCyan
     }
     else {
-        Write-Host "[$(Get-Logtime)] [INFO] No snapshots found - maybe new repository?" -ForegroundColor DarkCyan
+        Write-Host "[$(Get-Logtime)] [INFO] No snapshots found - new repository?" -ForegroundColor DarkCyan
     }
 
     # Repository health check
@@ -214,10 +153,11 @@ try {
 catch {
     Write-Host "`n[$(Get-Logtime)] [ERROR] FATAL ERROR: $_" -ForegroundColor Red
     Write-Host "[$(Get-Logtime)] [ERROR] Stack trace: $($_.ScriptStackTrace)" -ForegroundColor Red
+    exit 1
 }
 finally {
+    $null = Stop-Transcript
     if ($?) {
         Write-Host "`n[$(Get-Logtime)] [OK] Script completed successfully" -ForegroundColor Green
     }
-    $null = Stop-Transcript
 }
