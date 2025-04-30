@@ -17,6 +17,7 @@
 [string]$org = "myOrg"
 [string]$iflxServer = "https://iflx2.cloudheros.de" # InfluxDB v2
 [string]$tokenFile = "iflxToken.txt" # InfluxDB v2 Token
+$env:TZ = "Europe/Berlin"
 
 # Load InfluxDB Token
 
@@ -67,11 +68,61 @@ $LogPath {
 }
 
 function Get-ParkStatus {
+    [CmdletBinding()]
+    param()
+
     try {
-        return Invoke-RestMethod -Method GET -Uri "https://api.phlsys.de/api/park-infos"
+        # Daten von der API abrufen
+        $query = Invoke-RestMethod -Method GET -Uri "https://api.phlsys.de/api/park-infos"
+
+        # Funktion zur Konvertierung der Zeitstempel
+        function Convert-Timestamps {
+            param(
+                [PSObject]$InputObject
+            )
+            
+            $result = @{}
+            $InputObject.PSObject.Properties | ForEach-Object {
+                $name = $_.Name
+                $value = $_.Value
+                
+                # Erweiterte Prüfung auf Zeitformate
+                if ($value -and $value -match '^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?|\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2}|\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})$') {
+                    try {
+                        # Explizite Kultur für verschiedene Formate
+                        $culture = [System.Globalization.CultureInfo]::InvariantCulture
+                        if ($value -match '^\d{2}/\d{2}/\d{4}') {
+                            $culture = [System.Globalization.CultureInfo]::GetCultureInfo('en-US')
+                        }
+                        elseif ($value -match '^\d{2}\.\d{2}\.\d{4}') {
+                            $culture = [System.Globalization.CultureInfo]::GetCultureInfo('de-DE')
+                        }
+                        
+                        $date = [datetime]::Parse($value, $culture)
+                        $result[$name] = $date.ToString("o")  # ISO 8601 Format
+                    }
+                    catch {
+                        $result[$name] = $value
+                    }
+                }
+                else {
+                    $result[$name] = $value
+                }
+            }
+            return [PSCustomObject]$result
+        }
+
+        # Verarbeitung der API-Antwort
+        if ($query -is [Array]) {
+            return $query | ForEach-Object { Convert-Timestamps -InputObject $_ }
+        }
+        else {
+            return Convert-Timestamps -InputObject $query
+        }
     }
     catch {
-        throw "[ERROR] while fetching Park Status from 'https://api.phlsys.de': $(($_.Exception).Message)!"
+        $msg = "while fetching Park Status from 'https://api.phlsys.de'! $(($_.Exception).Message)!"
+        throw $(Write-CustomLog -Level "ERROR" -Message $msg -LogFile $logPath)
     }
 }
 
@@ -113,21 +164,26 @@ function Get-PhlWaitTime {
 }
 
 function Write-ParkState ($parkStatus) {
+
     try {
+        # Convert the parkStatus object to a hashtable
+        $metrics = @{}
+        foreach ($property in $parkStatus.PSObject.Properties) {
+            $metrics[$property.Name] = $property.Value
+        }
+
         Write-Influx -Server $iflxServer `
             -Bucket $bucket `
             -Organisation $org `
             -Token $iflxToken `
-            -Timestamp $parkStatus.updatedAt  `
+            -Timestamp $parkStatus.updatedAt `
             -Measure parkState `
-            -Metrics @{
-            "isOpen"              = $parkStatus.isOpen
-            "closeAt"             = $parkStatus.close
-            "manuallyForceClosed" = $parkStatus.manuallyForceClosed
-        }
+            -Metrics $metrics
     }
     catch {
-        throw "[ERROR] while writing parkState into InfluxDB '$iflxServer': $(($_.Exception).Message)"
+
+        $msg = "[ERROR] while writing parkState into InfluxDB '$iflxServer'"
+        throw $(Write-CustomLog -Level "ERROR" -Message $msg -LogFile $logPath)
     }
 }
 
@@ -154,7 +210,7 @@ try {
                 -Bucket $bucket `
                 -Organisation $org `
                 -Token $iflxToken `
-                -Timestamp $ride.lastUpdated `
+                -Timestamp ($ride.lastUpdated.ToUniversalTime().ToString("o")) `
                 -Measure rideStatus `
                 -Tags @{ ride = $ride.ride } `
                 -Metrics @{
