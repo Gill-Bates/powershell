@@ -15,7 +15,7 @@
 [string]$resticRepo = "X:\_Restic\Repository\unraid"
 [string]$repoPasswordFile = "X:\_Restic\Password\unraid.txt"
 [string]$logFolder = $resticRepo.Split("_")[0] + "_Logs"
-[string]$logPath = Join-Path $logFolder ("restic_backup_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".log")
+[string]$logPath = Join-Path $logFolder ("restic_backup_" + (Get-Date -Format "yyyy-MM-dd") + ".log")
 [array]$excludeDirectories = @(
     "\_CCTV"
 ) | Sort-Object
@@ -83,7 +83,7 @@ function Show-Header {
 
 # Start Logging
 if (!(Test-Path $logFolder)) {
-    New-Item -ItemType Directory -Path $logFolder -Force | Out-Null 
+    $null = New-Item -ItemType Directory -Path $logFolder -Force
 }
 $null = Start-Transcript -UseMinimalHeader -Path $logPath
 
@@ -116,7 +116,7 @@ try {
         Write-Host "[$(Get-Logtime)] [INFO] Found $($allSnapshots.Count) snapshots (Last: $(($allSnapshots.LastWriteTime | Sort-Object -Descending)[0].ToString('yyyy-MM-dd HH:mm:ss')))" -ForegroundColor DarkCyan
     }
     else {
-        Write-Host "[$(Get-Logtime)] [INFO] No snapshots found - new repository?" -ForegroundColor DarkCyan
+        Write-Host "[$(Get-Logtime)] [INFO] No snapshots found - maybe new repository?" -ForegroundColor DarkCyan
     }
 
     # Repository health check
