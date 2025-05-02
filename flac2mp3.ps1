@@ -20,7 +20,7 @@ function Flac2Mp3 {
         throw "[ERROR] ffmpeg binary is missing! Install Binary and try again. Download latest Binary here: https://www.gyan.dev/ffmpeg/builds"
     }
 
-    if ($Recurse) { $AllFiles = Get-ChildItem -Path $Path -Recurse } else {
+    if ($Recurse) { $AllFiles = Get-ChildItem -Path $Path -Recurse | Where-Object { $_.Extension -like ".flac" } } else {
         $AllFiles = Get-ChildItem -Path $Path | Where-Object { $_.Extension -like ".flac" }
     }
 
