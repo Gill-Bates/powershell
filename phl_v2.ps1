@@ -38,8 +38,8 @@ function Enable-Logrotate {
     )
 
     # Check if config already exists
-    if (-Not (Test-Path $ConfigPath)) {
-        Write-Host "Creating logrotate configuration for $LogPath..." -ForegroundColor Green
+    if (!(Test-Path $ConfigPath)) {
+        Write-Host "Creating logrotate configuration for '$LogPat' ..." -ForegroundColor Green
 
         $configContent = @"
 $LogPath {
@@ -54,16 +54,17 @@ $LogPath {
 "@
 
         # Write to temporary file and move with root privileges
-        $tempFile = "/tmp/phlapi_logrotate.conf"
-        $configContent | Out-File -Encoding ASCII -NoNewline $tempFile
+        $tempFile = New-TemporaryFile
+        Set-Content -Path $tempFile.FullName -Value $configContent -Encoding ASCII -NoNewline
         sudo mv $tempFile $ConfigPath
+
         sudo chown root:root $ConfigPath
         sudo chmod 644 $ConfigPath
 
-        Write-Host "Logrotate configuration created at: $ConfigPath" -ForegroundColor Cyan
+        Write-Host "Logrotate configuration created at: '$ConfigPath'" -ForegroundColor Cyan
     }
     else {
-        Write-Host "Logrotate configuration for $LogPath already exists at $ConfigPath." -ForegroundColor Gray
+        Write-Host "[OK]   Logrotate configuration for $LogPath already exists at $ConfigPath." -ForegroundColor Gray
     }
 }
 

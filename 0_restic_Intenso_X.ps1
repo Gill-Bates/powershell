@@ -4,8 +4,8 @@
 .DESCRIPTION
     Performs backups using Restic with comprehensive error handling, logging and performance optimizations
 .NOTES
-    Last Modified: 2025-05-02
-    Author: Fother Mucker (optimized)
+    Last Modified: 2025-05-03
+    Author: Fother Mucker
 #>
 
 #Requires -PSEdition Core
@@ -16,6 +16,7 @@ $config = @{
     Source             = "Z:\"
     ResticRepo         = "X:\_Restic\Repository\unraid"
     RepoPasswordFile   = "X:\_Restic\Password\unraid.txt"
+    DaysBeforePrune    = 365
     LogFolder          = "X:\_Logs"  # Fixed path instead of string manipulation
     ExcludeDirectories = @(
         "\_CCTV"
@@ -221,7 +222,8 @@ try {
     Write-Host "[$(Get-Logtime)] [INFO] Backup completed in $([math]::Round($measure.TotalMinutes, 2)) minutes" -ForegroundColor DarkCyan
     
     # Prune operation
-    $pruneArgs = @("--keep-daily", "365", "--prune")
+    Write-Host "[$(Get-Logtime)] [INFO] Starting Prune process (keep last '$($config.DaysBeforePrune)' Days) ..." -ForegroundColor DarkCyan
+    $pruneArgs = @("--keep-daily", "$($config.DaysBeforePrune)", "--prune")
     $pruneSuccess = Invoke-ResticCommand -Command "forget" -Arguments $pruneArgs -OperationName "Prune Operation"
     if (-not $pruneSuccess) {
         throw "Prune operation failed"
