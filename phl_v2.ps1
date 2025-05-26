@@ -5,8 +5,8 @@
 <# 
 .SYNOPSIS Phl Waitingtime Processor
 .DESCRIPTION 
-.NOTES Author:  Gill Bates, Last Update: 2025-04-17
-.NOTES          Tuned by ChatGPT 4-o on 2023-10-17
+.NOTES Author:  Gill Bates, Last Update: 2025-05-25
+.NOTES          Tuned by ChatGPT 4-o on 2024-10-17
 #>
 
 #Requires -Module Influx
@@ -39,7 +39,7 @@ function Enable-Logrotate {
 
     # Check if config already exists
     if (!(Test-Path $ConfigPath)) {
-        Write-Host "Creating logrotate configuration for '$LogPat' ..." -ForegroundColor Green
+        Write-Host "[INFO] Creating logrotate configuration for '$LogPath' ..." -ForegroundColor Green
 
         $configContent = @"
 $LogPath {
