@@ -1,18 +1,13 @@
 <# 
 .SYNOPSIS Mp3-Renamer
 .DESCRIPTION 
-.NOTES Author: Gill Bates, Last Update: 07.11.2021
+.NOTES Author: Gill Bates, Last Update: 2025-09-04
 #>
-
-[string]$Path = "C:\Users\Tobias\Downloads\BENGR_-_Blow_The_Speakers_(Extended_Mix)-(DWX1507)-WEB-2023"
-[int]$leadingNumbers = 3
 
 function Rename-Mp3 {
     Param(
-        [parameter(Mandatory = $true)]
-        [String]$Path,
-        [parameter(Mandatory = $true)]
-        [int]$leadingNumbers
+        [parameter()]
+        [string]$Path = (Get-Location).Path
     )
 
     $allMp3 = Get-ChildItem -Path $Path -Filter *.mp3 -Recurse
@@ -21,16 +16,18 @@ function Rename-Mp3 {
     $output = New-Item -Path $Path -Name "_Rename" -ItemType "directory" -Force
     $TextInfo = (Get-Culture).TextInfo
 
-    $count = 1
-    $allMp3 | ForEach-Object {
-    
-        Copy-Item $_.FullName -Destination $output -Force
-        $_.BaseName.substring($leadingNumbers) -replace '_', ' ' -replace "and", "&" | ForEach-Object {
+    [int]$count = 1
+    foreach ($mp3 in $allMp3) {
+        Copy-Item $mp3.FullName -Destination $output.FullName -Force
 
-            $newCamelCase = $TextInfo.ToTitleCase($_).Trim()
-        }
-        Write-Information "[$Count/$($allMp3.Count)] Renaming '$newCamelCase' ..." - -InformationAction Continue
-        Rename-Item -Path "$output\$($_.PSChildName)" -NewName ($newCamelCase + $_.Extension)
+        $base = $mp3.BaseName
+        # Führende Zahlen + optionaler Unterstrich entfernen
+        $newNameBase = $base -replace '^\d+_?', '' -replace '_', ' ' -replace '\band\b', '&'
+
+        $newCamelCase = $TextInfo.ToTitleCase($newNameBase).Trim()
+
+        Write-Information "[$count/$($allMp3.Count)] Renaming '$($mp3.Name)' to '$newCamelCase$($mp3.Extension)'" -InformationAction Continue
+        Rename-Item -Path (Join-Path $output.FullName $mp3.Name) -NewName ($newCamelCase + $mp3.Extension) -Force
         $count++
     }
 }
