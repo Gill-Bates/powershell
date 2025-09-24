@@ -1,0 +1,458 @@
+{
+    "annotations": {
+        "list": [
+            {
+                "builtIn": 1,
+                "datasource": {
+                    "type": "grafana",
+                    "uid": "-- Grafana --"
+                },
+                "enable": true,
+                "hide": true,
+                "iconColor": "rgba(0, 211, 255, 1)",
+                "name": "Annotations & Alerts",
+                "type": "dashboard"
+            }
+        ]
+    },
+    "editable": true,
+    "fiscalYearStartMonth": 0,
+    "graphTooltip": 0,
+    "id": 63,
+    "links": [],
+    "panels": [
+        {
+            "datasource": {
+                "type": "influxdb",
+                "uid": "deyxl7pjnxlvkd"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "custom": {
+                        "axisBorderShow": false,
+                        "axisCenteredZero": false,
+                        "axisColorMode": "text",
+                        "axisLabel": "",
+                        "axisPlacement": "auto",
+                        "barAlignment": 0,
+                        "barWidthFactor": 0.6,
+                        "drawStyle": "line",
+                        "fillOpacity": 0,
+                        "gradientMode": "none",
+                        "hideFrom": {
+                            "legend": false,
+                            "tooltip": false,
+                            "viz": false
+                        },
+                        "insertNulls": false,
+                        "lineInterpolation": "linear",
+                        "lineWidth": 1,
+                        "pointSize": 5,
+                        "scaleDistribution": {
+                            "type": "linear"
+                        },
+                        "showPoints": "auto",
+                        "spanNulls": false,
+                        "stacking": {
+                            "group": "A",
+                            "mode": "none"
+                        },
+                        "thresholdsStyle": {
+                            "mode": "off"
+                        }
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": 0
+                            },
+                            {
+                                "color": "red",
+                                "value": 80
+                            }
+                        ]
+                    },
+                    "unit": "m"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 13,
+                "w": 12,
+                "x": 0,
+                "y": 0
+            },
+            "id": 1,
+            "options": {
+                "legend": {
+                    "calcs": [],
+                    "displayMode": "list",
+                    "placement": "bottom",
+                    "showLegend": true
+                },
+                "tooltip": {
+                    "hideZeros": false,
+                    "mode": "single",
+                    "sort": "none"
+                }
+            },
+            "pluginVersion": "12.1.1",
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "influxdb",
+                        "uid": "deyxl7pjnxlvkd"
+                    },
+                    "query": "from(bucket: \"wartezeiten\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r[\"park_name\"] == \"${selectPark}\") \r\n  |> filter(fn: (r) => r[\"_field\"] == \"waiting_time\")\r\n  |> map(fn: (r) => ({\r\n        _time: r._time,\r\n        _value: r._value,\r\n        _field: r.attraction,   // Legende = Ride-Name\r\n        _measurement: \"rides\"   // optional, einheitliches Measurement\r\n    }))\r\n  |> keep(columns: [\"_time\", \"_value\", \"_field\", \"_measurement\"])\r\n",
+                    "refId": "A"
+                }
+            ],
+            "title": "Wartezeiten",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "influxdb",
+                "uid": "deyxl7pjnxlvkd"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "thresholds"
+                    },
+                    "custom": {
+                        "align": "auto",
+                        "cellOptions": {
+                            "type": "color-text"
+                        },
+                        "inspect": false
+                    },
+                    "decimals": 0,
+                    "fieldMinMax": false,
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": 0
+                            },
+                            {
+                                "color": "#EAB839",
+                                "value": 30
+                            },
+                            {
+                                "color": "dark-orange",
+                                "value": 45
+                            },
+                            {
+                                "color": "dark-red",
+                                "value": 60
+                            }
+                        ]
+                    },
+                    "unit": "m"
+                },
+                "overrides": [
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "_time"
+                        },
+                        "properties": [
+                            {
+                                "id": "custom.hidden",
+                                "value": true
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "Wartezeit"
+                        },
+                        "properties": [
+                            {
+                                "id": "custom.width",
+                                "value": 70
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "Zeit"
+                        },
+                        "properties": [
+                            {
+                                "id": "custom.width",
+                                "value": 68
+                            }
+                        ]
+                    }
+                ]
+            },
+            "gridPos": {
+                "h": 18,
+                "w": 4,
+                "x": 12,
+                "y": 0
+            },
+            "id": 5,
+            "options": {
+                "cellHeight": "sm",
+                "footer": {
+                    "countRows": false,
+                    "fields": "",
+                    "reducer": [
+                        "sum"
+                    ],
+                    "show": false
+                },
+                "frameIndex": 8,
+                "showHeader": true,
+                "sortBy": [
+                    {
+                        "desc": true,
+                        "displayName": "Zeit"
+                    }
+                ]
+            },
+            "pluginVersion": "12.1.1",
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "influxdb",
+                        "uid": "deyxl7pjnxlvkd"
+                    },
+                    "query": "from(bucket: \"wartezeiten\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r[\"park_name\"] == \"${selectPark}\") \r\n  |> filter(fn: (r) => r[\"_field\"] == \"waiting_time\")\r\n  |> filter(fn: (r) => r._value >= 15)           // nur Wartezeiten >= 15 min\r\n  |> last()                                      // nur letzter Wert pro Ride\r\n  |> map(fn: (r) => ({\r\n        _time: r._time,\r\n        Zeit: r._value,     // neues Feld\r\n        Ride: r.attraction,      // Ride-Name umbenannt\r\n        _measurement: \"rides\"\r\n    }))\r\n  |> keep(columns: [\"_time\", \"Zeit\", \"Ride\"])\r\n",
+                    "refId": "A"
+                }
+            ],
+            "title": "Wartezeiten",
+            "type": "table"
+        },
+        {
+            "datasource": {
+                "type": "influxdb",
+                "uid": "deyxl7pjnxlvkd"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "thresholds"
+                    },
+                    "custom": {
+                        "axisPlacement": "auto",
+                        "fillOpacity": 70,
+                        "hideFrom": {
+                            "legend": false,
+                            "tooltip": false,
+                            "viz": false
+                        },
+                        "insertNulls": false,
+                        "lineWidth": 0,
+                        "spanNulls": false
+                    },
+                    "mappings": [
+                        {
+                            "options": {
+                                "false": {
+                                    "color": "dark-red",
+                                    "index": 1,
+                                    "text": "PARK CLOSED"
+                                },
+                                "true": {
+                                    "color": "dark-green",
+                                    "index": 0,
+                                    "text": "OPERATIONAL"
+                                }
+                            },
+                            "type": "value"
+                        }
+                    ],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": 0
+                            },
+                            {
+                                "color": "red",
+                                "value": 80
+                            }
+                        ]
+                    }
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 6,
+                "w": 6,
+                "x": 16,
+                "y": 0
+            },
+            "id": 6,
+            "options": {
+                "alignValue": "left",
+                "legend": {
+                    "displayMode": "list",
+                    "placement": "bottom",
+                    "showLegend": false
+                },
+                "mergeValues": true,
+                "rowHeight": 0.9,
+                "showValue": "auto",
+                "tooltip": {
+                    "hideZeros": false,
+                    "mode": "single",
+                    "sort": "none"
+                }
+            },
+            "pluginVersion": "12.1.1",
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "influxdb",
+                        "uid": "deyxl7pjnxlvkd"
+                    },
+                    "query": "from(bucket: \"wartezeiten\")\r\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\r\n  |> filter(fn: (r) => r[\"_measurement\"] == \"opening_times\")\r\n  |> filter(fn: (r) => r[\"_field\"] == \"opened_today\")\r\n  |> map(fn: (r) => ({\r\n        _time: r._time,\r\n        _value: r._value,        // true/false\r\n        _field: r.park_name,     // Parkname als Legende\r\n        _measurement: \"\"         // Measurement leer, verhindert doppelte Anzeige\r\n    }))\r\n",
+                    "refId": "A"
+                }
+            ],
+            "title": "Park Status",
+            "type": "state-timeline"
+        },
+        {
+            "datasource": {
+                "type": "influxdb",
+                "uid": "deyxl7pjnxlvkd"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "thresholds"
+                    },
+                    "custom": {
+                        "axisPlacement": "auto",
+                        "fillOpacity": 70,
+                        "hideFrom": {
+                            "legend": false,
+                            "tooltip": false,
+                            "viz": false
+                        },
+                        "insertNulls": false,
+                        "lineWidth": 0,
+                        "spanNulls": false
+                    },
+                    "mappings": [
+                        {
+                            "options": {
+                                "closed": {
+                                    "color": "dark-red",
+                                    "index": 1,
+                                    "text": "CLOSED"
+                                },
+                                "opened": {
+                                    "color": "dark-green",
+                                    "index": 0,
+                                    "text": "OPEN"
+                                }
+                            },
+                            "type": "value"
+                        }
+                    ],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": 0
+                            }
+                        ]
+                    }
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 12,
+                "w": 6,
+                "x": 16,
+                "y": 6
+            },
+            "id": 2,
+            "options": {
+                "alignValue": "left",
+                "legend": {
+                    "displayMode": "list",
+                    "placement": "bottom",
+                    "showLegend": false
+                },
+                "mergeValues": true,
+                "rowHeight": 0.9,
+                "showValue": "never",
+                "tooltip": {
+                    "hideZeros": false,
+                    "mode": "single",
+                    "sort": "none"
+                }
+            },
+            "pluginVersion": "12.1.1",
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "influxdb",
+                        "uid": "deyxl7pjnxlvkd"
+                    },
+                    "query": "from(bucket: \"wartezeiten\")\r\n  |> range(start: -1d)\r\n  |> filter(fn: (r) => r[\"_measurement\"] == \"waiting_times\")\r\n  |> filter(fn: (r) => r[\"park_name\"] == \"${selectPark}\")\r\n  |> filter(fn: (r) => r[\"_field\"] == \"waiting_time\")   // nur um die Zeilen zu bekommen\r\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\r\n  |> map(fn: (r) => ({\r\n        _time: r._time,\r\n        _value: r.status,      // Status als String behalten\r\n        _field: r.attraction   // Ride-Name für Legende\r\n    }))\r\n  |> yield(name: \"status_timeline\")\r\n",
+                    "refId": "A"
+                }
+            ],
+            "title": "Ride Status",
+            "type": "state-timeline"
+        }
+    ],
+    "preload": false,
+    "schemaVersion": 41,
+    "tags": [],
+    "templating": {
+        "list": [
+            {
+                "current": {
+                    "text": "Universal Epic Universe",
+                    "value": "Universal Epic Universe"
+                },
+                "datasource": {
+                    "type": "influxdb",
+                    "uid": "deyxl7pjnxlvkd"
+                },
+                "definition": "from(bucket: \"wartezeiten\")\r\n  |> range(start: -30d)\r\n  |> filter(fn: (r) => r[\"_measurement\"] == \"waiting_times\")\r\n  |> keep(columns: [\"park_name\"])\r\n  |> group()\r\n  |> distinct(column: \"park_name\")\r\n  |> sort()\r\n",
+                "label": "Select Park",
+                "name": "selectPark",
+                "options": [],
+                "query": {
+                    "query": "from(bucket: \"wartezeiten\")\r\n  |> range(start: -30d)\r\n  |> filter(fn: (r) => r[\"_measurement\"] == \"waiting_times\")\r\n  |> keep(columns: [\"park_name\"])\r\n  |> group()\r\n  |> distinct(column: \"park_name\")\r\n  |> sort()\r\n"
+                },
+                "refresh": 1,
+                "regex": "",
+                "type": "query"
+            }
+        ]
+    },
+    "time": {
+        "from": "now-3h",
+        "to": "now"
+    },
+    "timepicker": {},
+    "timezone": "browser",
+    "title": "wartezeiten.app",
+    "uid": "37bb0c07-0c22-41b9-b365-bb41e13fb5d8",
+    "version": 13
+}

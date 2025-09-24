@@ -26,7 +26,7 @@ $INFLUXDB_USE_HTTPS = $true
 $INFLUXDB_VALIDATE_CERTIFICATE = $true
 $INFLUXDB_ORGANIZATION = "myOrg"
 $INFLUXDB_BUCKET = "wartezeiten"
-$INFLUXDB_TOKEN = ""
+$INFLUXDB_TOKEN = "q-tVkYxGtopazibH3Hvzpgb7G7J6O-J0n9L5frQmDDOSu0s7wcTrB8lWo7ApsYyFhAWfH2beERwpTRe3jp344w=="
 
 # PARKS TO QUERY (use park IDs from the API)
 [array]$LIST_OF_PARK_IDS = @(
@@ -177,9 +177,9 @@ function Write-InfluxOpeningHours {
         [Parameter(Mandatory = $true)]
         [bool]$OpenedToday,
         [Parameter(Mandatory = $true)]
-        [datetime]$OpenFrom,
+        [string]$OpenFrom,    # ISO 8601 String von der API
         [Parameter(Mandatory = $true)]
-        [datetime]$ClosedFrom
+        [string]$ClosedFrom   # ISO 8601 String von der API
     )
 
     if (-not $INFLUXDB_ENABLED) {
@@ -193,8 +193,11 @@ function Write-InfluxOpeningHours {
     }
 
     try {
-        $openTs = [int][double]::Parse((Get-Date $OpenFrom -UFormat %s))
-        $closeTs = [int][double]::Parse((Get-Date $ClosedFrom -UFormat %s))
+        $OpenFromDT = [datetimeoffset]::Parse($OpenFrom)
+        $ClosedFromDT = [datetimeoffset]::Parse($ClosedFrom)
+
+        $openTs = [int]$OpenFromDT.ToUnixTimeSeconds()
+        $closeTs = [int]$ClosedFromDT.ToUnixTimeSeconds()
 
         $measurement = "opening_times"
         $tagParkName = $ParkName -replace "([,= ])", '\$1'
@@ -408,6 +411,67 @@ function Test-WaitingTimeEntry {
     
     return $hasName -and $hasDateTime -and $hasWaitingTime
 }
+
+
+function Get-PhlStatus {
+    [CmdletBinding()]
+    param()
+
+    try {
+        # Daten von der API abrufen
+        $query = Invoke-RestMethod -Method GET -Uri "https://api.phlsys.de/api/park-infos"
+
+        # Funktion zur Konvertierung der Zeitstempel
+        function Convert-Timestamps {
+            param(
+                [PSObject]$InputObject
+            )
+            
+            $result = @{}
+            $InputObject.PSObject.Properties | ForEach-Object {
+                $name = $_.Name
+                $value = $_.Value
+                
+                # Erweiterte Prüfung auf Zeitformate
+                if ($value -and $value -match '^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?|\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2}|\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})$') {
+                    try {
+                        # Explizite Kultur für verschiedene Formate
+                        $culture = [System.Globalization.CultureInfo]::InvariantCulture
+                        if ($value -match '^\d{2}/\d{2}/\d{4}') {
+                            $culture = [System.Globalization.CultureInfo]::GetCultureInfo('en-US')
+                        }
+                        elseif ($value -match '^\d{2}\.\d{2}\.\d{4}') {
+                            $culture = [System.Globalization.CultureInfo]::GetCultureInfo('de-DE')
+                        }
+                        
+                        $date = [datetime]::Parse($value, $culture)
+                        $result[$name] = $date.ToString("o")  # ISO 8601 Format
+                    }
+                    catch {
+                        $result[$name] = $value
+                    }
+                }
+                else {
+                    $result[$name] = $value
+                }
+            }
+            return [PSCustomObject]$result
+        }
+
+        # Verarbeitung der API-Antwort
+        if ($query -is [Array]) {
+            return $query | ForEach-Object { Convert-Timestamps -InputObject $_ }
+        }
+        else {
+            return Convert-Timestamps -InputObject $query
+        }
+    }
+    catch {
+        $msg = "while fetching Park Status from 'https://api.phlsys.de'! $(($_.Exception).Message)!"
+        throw $(Write-CustomLog -Level "ERROR" -Message $msg -LogFile $logPath)
+    }
+}
+
 #endregion functions
 
 # ------------ MAIN PROGRAM

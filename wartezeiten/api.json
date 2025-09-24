@@ -20,16 +20,14 @@ paths:
             enum:
               - de
               - en
-      responses:
-        200:
+      responses: 200:
           description: Successful request
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: "#/components/schemas/parks"
-        400:
+                  $ref: "#/components/schemas/parks"400:
           description: Invalid parameters
         405:
           description: Method not allowed
@@ -47,16 +45,14 @@ paths:
           description: Theme park id or uuid
           schema:
             type: string
-      responses:
-        200:
+      responses: 200:
           description: Successful request
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: "#/components/schemas/openingtimes"
-        400:
+                  $ref: "#/components/schemas/openingtimes"400:
           description: Invalid parameters
         405:
           description: Method not allowed
@@ -83,16 +79,14 @@ paths:
             enum:
               - de
               - en
-      responses:
-        200:
+      responses: 200:
           description: Successful request
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: "#/components/schemas/waitingtimes"
-        400:
+                  $ref: "#/components/schemas/waitingtimes"400:
           description: Invalid parameters
         404:
           description: No data for the park
