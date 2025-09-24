@@ -275,7 +275,12 @@ function Write-InfluxWaitingTimes {
 
             $tagParkName = $ParkName -replace "([,= ])", '\$1'
             $tagRide = ($wt.name) -replace "([,= ])", '\$1'
-            $tagStatus = if ($wt.status) { $wt.status -replace "([,= ])", '\$1' } else { "unknown" }
+            $tagStatus = if (-not [string]::IsNullOrEmpty($wt.status)) { 
+                $wt.status -replace "([,= ])", '\$1' 
+            }
+            else { 
+                "unknown" 
+            }
 
             $tags = "park_name=$tagParkName,attraction=$tagRide,status=$tagStatus"
 
