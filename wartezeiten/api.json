@@ -1,0 +1,176 @@
+openapi: 3.0.0
+info:
+  title: Wartezeiten.APP - API
+  version: 1.5.0
+  description: Utilize the Wartezeiten.APP - API to obtain waiting times for attractions in theme parks worldwide via JSON! Discover roller coasters from Germany to the USA and plan your visit efficiently. Be informed about current demand and queue time trends. Explore the world of theme parks like never before!
+
+paths:
+  /v1/parks:
+    get:
+      summary: Available theme parks
+      description: |
+        Note: This endpoint caches responses for 24 hours.
+      parameters:
+        - in: header
+          name: language
+          required: true
+          description: Displayed language
+          schema:
+            type: string
+            enum:
+              - de
+              - en
+      responses:
+        200:
+          description: Successful request
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/parks"
+        400:
+          description: Invalid parameters
+        405:
+          description: Method not allowed
+        429:
+          description: Too many requests. Wait 10 seconds.
+  /v1/openingtimes:
+    get:
+      summary: Opening hours of the theme parks
+      description: |
+        Note: This endpoint caches responses for 24 hours.
+      parameters:
+        - in: header
+          name: park
+          required: true
+          description: Theme park id or uuid
+          schema:
+            type: string
+      responses:
+        200:
+          description: Successful request
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/openingtimes"
+        400:
+          description: Invalid parameters
+        405:
+          description: Method not allowed
+        429:
+          description: Too many requests. Wait 10 seconds.
+  /v1/waitingtimes:
+    get:
+      summary: Current queue times
+      description: |
+        Note: This endpoint caches responses for 5 minutes.
+      parameters:
+        - in: header
+          name: park
+          required: true
+          description: Theme park id or uuid
+          schema:
+            type: string
+        - in: header
+          name: language
+          required: true
+          description: Displayed language
+          schema:
+            type: string
+            enum:
+              - de
+              - en
+      responses:
+        200:
+          description: Successful request
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/waitingtimes"
+        400:
+          description: Invalid parameters
+        404:
+          description: No data for the park
+        405:
+          description: Method not allowed
+        429:
+          description: Too many requests. Wait 60 seconds. Max 10 Requests in 60 seconds per Endpoint!
+
+components:
+  schemas:
+    parks:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Name of the amusement park.
+        land:
+          type: string
+          description: Country where the park is located.
+      example:
+        id: "altontowers"
+        uuid: "19f72fe4-c651-491a-95d0-6ed0a6106129"
+        name: "Alton Towers"
+        land: "Great Britain"
+    openingtimes:
+      type: object
+      properties:
+        opened_today:
+          type: boolean
+          example: true
+          description: Indicates if the park is open today.
+        open_from:
+          type: string
+          format: date-time
+          example: "2024-08-12T09:00:00+02:00"
+          description: Opening time for the park today.
+        closed_from:
+          type: string
+          format: date-time
+          example: "2024-08-12T18:00:00+02:00"
+          description: Closing time for the park today.
+      example:
+        opened_today: true
+        open_from: "2024-08-12T09:00:00+02:00"
+        closed_from: "2024-08-12T18:00:00+02:00"
+    waitingtimes:
+      type: object
+      properties:
+        datetime:
+          type: string
+          format: date-time
+          example: "2023-09-29T12:52:00+02:00"
+        date:
+          type: string
+          format: date
+          example: "2023-09-29"
+        time:
+          type: string
+          format: time
+          example: "12:52"
+        code:
+          type: string
+          example: "383533"
+        uuid:
+          type: string
+          example: "14077dfa-4f29-4ce0-b1cb-2818fc13731f"
+        waitingtime:
+          type: integer
+          example: 20
+        status:
+          type: string
+          enum:
+            - opened
+            - virtualqueue
+            - maintenance
+            - closedice
+            - closedweather
+            - closed
+        name:
+          type: string
+          example: "WODAN - Timburcoaster"
