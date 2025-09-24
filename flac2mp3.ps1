@@ -1,52 +1,82 @@
 <# 
-.SYNOPSIS Flac to Mp3 Converter. Requires ffmpeg
-.DESCRIPTION 
-.NOTES Author: Gill Bates, Last Update: 22.05.2023
+.SYNOPSIS 
+    FLAC to MP3 Converter using ffmpeg with cover art support
+.NOTES 
+    Author: Gill Bates
+    Last Update: 2025-09-04
+    Requires: ffmpeg in PATH
 #>
-function Flac2Mp3 {
+
+function Convert-FlacToMp3 {
     param (
-        [string]$Path,
-        [switch]$Recurse,
-        [switch]$Sanitize
+        [string]$inputFolder = $(Get-Location).Path,
+        [string]$outputFolder = $(Join-Path (Get-Location).Path "_MP3")
     )
 
-    # Check Installation
-    $ErrorActionPreference = 'SilentlyContinue'
-    $ffmpegCheck = ffmpeg.exe -version
-    $ErrorActionPreference = 'Continue'
-
-    if (!$ffmpegCheck) {
-        
-        throw "[ERROR] ffmpeg binary is missing! Install Binary and try again. Download latest Binary here: https://www.gyan.dev/ffmpeg/builds"
+    if (!(Test-Path $outputFolder)) {
+        New-Item -ItemType Directory -Path $outputFolder | Out-Null
     }
 
-    if ($Recurse) { $AllFiles = Get-ChildItem -Path $Path -Recurse } else {
-        $AllFiles = Get-ChildItem -Path $Path | Where-Object { $_.Extension -like ".flac" }
+    $flacFiles = Get-ChildItem -Path $inputFolder -Filter *.flac -File -Recurse
+
+    if (!$flacFiles) {
+        Write-Host "No FLAC files found in $inputFolder"
+        return
     }
 
-    # Do the Magic ...
-    Write-Information "Found $($AllFiles.Count) FLAC-Files to convert!" -InformationAction Continue
+    $coverArt = Get-ChildItem -Path (Join-Path $inputFolder '*') -Include *.jpg, *.jpeg -File | Select-Object -First 1
 
-    $AllFiles | ForEach-Object -Parallel {
+    if ($coverArt) {
+        Write-Host "Found cover art: $($coverArt.Name)"
+    }
+    else {
+        Write-Host "No cover art found in folder."
+    }
 
-        $OutputDir = "$($_.Directory)\_Flac2Mp3"
-        
-        if ($using:Sanitize) {
+    foreach ($file in $flacFiles) {
 
-            $TextInfo = (Get-Culture).TextInfo
-            $FileName = $_.BaseName.substring(2) -replace '_', ' ' -replace "and", "&"
-            $newCamelCase = ($TextInfo.ToTitleCase($FileName)).Trim("-") -replace "Feat ", "feat. "
-            $OutputFileName = "$OutputDir\" + ($newCamelCase).Trim() + ".mp3"
+        $outputPath = Join-Path $outputFolder ($file.BaseName + ".mp3")
+        Write-Host "Converting '$($file.Name)'..." -ForegroundColor Cyan
+
+        $ffmpegArgs = @("-i", $file.FullName)
+
+        if ($coverArt) {
+            $ffmpegArgs += @(
+                "-i", $coverArt.FullName,
+                "-map", "0:a",
+                "-map", "1:v",
+                "-c:v", "mjpeg",
+                "-pix_fmt", "yuvj420p",
+                "-c:a", "libmp3lame",
+                "-b:a", "320k",
+                "-c:v", "mjpeg",
+                "-id3v2_version", "3",
+                "-metadata:s:v", "title=Album cover",
+                "-metadata:s:v", "comment=Cover (front)"
+            )
         }
         else {
-            $OutputFileName = "$OutputDir\$($_.BaseName).mp3"
-        }
-           
-        if (!(Test-Path -Path $OutputDir)) {
-            New-Item -Path $OutputDir -ItemType "directory" -Force
+            $ffmpegArgs += @(
+                "-map_metadata", "0",
+                "-c:a", "libmp3lame",
+                "-b:a", "320k",
+                "-id3v2_version", "3"
+            )
         }
 
-        Write-Output "Converting '$($_.PSChildName)' now ..."
-        ffmpeg -i $_.FullName -ab 320k -map_metadata 0 -id3v2_version 3 $OutputFileName
+        $ffmpegArgs += @(
+            "-loglevel", "warning",
+            "-hide_banner",
+            "-nostats",
+            $outputPath
+        )
+
+        & ffmpeg @ffmpegArgs
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Convert-FlacToMp3: Failed to convert '$($file.Name)' (Exit code: $LASTEXITCODE)"
+        }
     }
 }
+
+# Alias für Kompatibilität
+Set-Alias -Name Flac2Mp3 -Value Convert-FlacToMp3 -Description "FLAC to MP3 converter with cover art support"
