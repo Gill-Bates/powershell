@@ -1,14 +1,14 @@
 <#
 .SYNOPSIS
-    FLAC → MP3 Converter with per-folder cover art and capitalization.
+    FLAC → MP3 Converter (with MP3 cover tagging and capitalization)
 .DESCRIPTION
-    • Converts all .flac files (recursively) to MP3 (320 kbps)
-    • Uses cover art from each source folder if available
-    • All MP3s are written flat into one output folder
-    • Uses wordlist.txt for English capitalization
-    • Keeps (), [], &, -, ., ' intact
-    • Correctly formats feat./ft./vs.
-    • Optional parallel conversion
+    • Converts .flac files (recursively) to MP3 (320 kbps)
+    • Processes existing .mp3 files without re-encoding (bitstream copy)
+    • Uses per-folder cover art (jpg/jpeg/png)
+    • All output files collected flat into one folder
+    • English capitalization correction via wordlist.txt
+    • Normalizes feat./ft./vs. usage
+    • Optional parallel execution
 .NOTES
     Author  : Gill Bates
     Updated : 2025-10-14
@@ -20,31 +20,21 @@ function Convert-FlacToMp3 {
     param (
         [string]$inputFolder = (Get-Location).Path,
         [string]$outputFolder = (Join-Path (Get-Location).Path "_MP3"),
-        [string]$dictionaryPath,
+        [string]$dictionaryPath = 
         [switch]$Parallel,
-        [int]$ThrottleLimit = 3
+        [int]$ThrottleLimit = 5
     )
 
-    # --- Validation ---
+    # ──────────────────────────────────────────────────────────────
+    # 1. Validation
+    # ──────────────────────────────────────────────────────────────
     if (-not (Test-Path $inputFolder)) { throw "Input folder not found: $inputFolder" }
     if (-not (Get-Command ffmpeg  -ErrorAction SilentlyContinue)) { throw "ffmpeg not found in PATH" }
     if (-not (Get-Command ffprobe -ErrorAction SilentlyContinue)) { throw "ffprobe not found in PATH" }
 
-    # --- Resolve dictionary path ---
-    if (-not $dictionaryPath) {
-        if ($MyInvocation.MyCommand.Path) {
-            $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-        }
-        elseif ($PSScriptRoot -and (Test-Path $PSScriptRoot)) {
-            $scriptDir = $PSScriptRoot
-        }
-        else {
-            $scriptDir = Get-Location
-        }
-        $dictionaryPath = "D:\_Repos\powershell\wordlist.txt"
-    }
-
-    # --- Load dictionary ---
+    # ──────────────────────────────────────────────────────────────
+    # 2. Load Dictionary
+    # ──────────────────────────────────────────────────────────────
     $Dictionary = @{}
     if (Test-Path $dictionaryPath) {
         Get-Content -Path $dictionaryPath -Encoding UTF8 | ForEach-Object {
@@ -57,7 +47,10 @@ function Convert-FlacToMp3 {
         Write-Warning "Dictionary not found: $dictionaryPath"
     }
 
-    # --- Helpers ---
+    # ──────────────────────────────────────────────────────────────
+    # 3. Helper Functions
+    # ──────────────────────────────────────────────────────────────
+
     function Capitalize([string]$w) {
         if (-not $w) { return $w }
         $lw = $w.ToLower()
@@ -147,62 +140,107 @@ function Convert-FlacToMp3 {
         if ($LASTEXITCODE -ne 0) { Write-Warning "ffmpeg failed for: $($file.Name)" }
     }
 
-    # --- Prepare ---
-    $flacFiles = Get-ChildItem -Path $inputFolder -Filter *.flac -File -Recurse
-    if (!$flacFiles) { Write-Host "No FLAC files found." -ForegroundColor Red; return }
+    # ──────────────────────────────────────────────────────────────
+    # 4. Preparation
+    # ──────────────────────────────────────────────────────────────
+    $files = Get-ChildItem -Path $inputFolder -Include *.flac, *.mp3 -File -Recurse
+    if (!$files) { Write-Host "No audio files found." -ForegroundColor Red; return }
     if (!(Test-Path $outputFolder)) { New-Item -ItemType Directory -Path $outputFolder | Out-Null }
 
     Write-Host "──────────────────────────────────────────────" -ForegroundColor DarkGray
-    Write-Host "🎧  Starting FLAC → MP3 Conversion" -ForegroundColor Cyan
+    Write-Host "🎧  Starting Conversion" -ForegroundColor Cyan
     Write-Host "Input : $inputFolder"
     Write-Host "Output: $outputFolder"
     Write-Host "──────────────────────────────────────────────" -ForegroundColor DarkGray
     Write-Host "🖼  Using per-folder cover lookup" -ForegroundColor DarkGray
 
-    $total = $flacFiles.Count
+    $total = $files.Count
     $index = 0
 
+    # ──────────────────────────────────────────────────────────────
+    # 5. Conversion Action
+    # ──────────────────────────────────────────────────────────────
     $convertAction = {
         param($file, $total, $Dictionary, $outputFolder)
 
-        # --- Cover lookup (fixed - works) ---
+        # Per-folder cover detection
         $coverArt = Get-ChildItem -Path (Join-Path $file.DirectoryName '*') -Include *.jpg, *.jpeg, *.png -File | Select-Object -First 1
 
         $meta = Get-FileMetadata $file
         $artist = if ($meta.artist) { $meta.artist } else { "Unknown Artist" }
-        $title = if ($meta.title) { $meta.title } else { [System.IO.Path]::GetFileNameWithoutExtension($file.Name) }
+        $title = if ($meta.title) { $meta.title }  else { [System.IO.Path]::GetFileNameWithoutExtension($file.Name) }
 
         $artist = Normalize-Title $artist
         $title = Normalize-Title $title
         $outPath = Build-OutputPath $artist $title $outputFolder
 
-        Invoke-FfmpegConversion $file $outPath $artist $title $coverArt
-
-        if ($coverArt) {
-            Write-Host "✓ $artist - $title  (cover: $($coverArt.Name))" -ForegroundColor Green
+        # ─── FLAC → MP3 ──────────────────────────────────────────────
+        if ($file.Extension -ieq ".flac") {
+            Invoke-FfmpegConversion $file $outPath $artist $title $coverArt
+            $msg = if ($coverArt) { "(cover: $($coverArt.Name))" } else { "(no cover)" }
+            Write-Host "✓ $artist - $title  $msg" -ForegroundColor Green
         }
-        else {
-            Write-Host "✓ $artist - $title  (no cover)" -ForegroundColor Yellow
+
+        # ─── MP3 (bitstream copy, add cover) ─────────────────────────
+        elseif ($file.Extension -ieq ".mp3") {
+            if ($coverArt) {
+                $args = @(
+                    "-i", $file.FullName,
+                    "-i", $coverArt.FullName,
+                    "-map", "0:a", "-map", "1:v",
+                    "-c:a", "copy",
+                    "-c:v", "mjpeg", "-pix_fmt", "yuvj420p",
+                    "-id3v2_version", "3",
+                    "-metadata", "artist=$artist",
+                    "-metadata", "title=$title",
+                    "-metadata:s:v", "title=Album cover",
+                    "-metadata:s:v", "comment=Cover (front)",
+                    "-y",
+                    "-loglevel", "error", "-hide_banner", "-nostats",
+                    $outPath
+                )
+                & ffmpeg @args
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Warning "ffmpeg remux failed for: $($file.Name)"
+                    Copy-Item $file.FullName $outPath -Force
+                }
+                else {
+                    Write-Host "→ MP3 tagged with cover: $artist - $title" -ForegroundColor Cyan
+                }
+            }
+            else {
+                Copy-Item -Path $file.FullName -Destination $outPath -Force
+                Write-Host "→ Copied existing MP3: $artist - $title (no cover)" -ForegroundColor Yellow
+            }
         }
     }
 
+    # ──────────────────────────────────────────────────────────────
+    # 6. Execution (Parallel or Sequential)
+    # ──────────────────────────────────────────────────────────────
     if ($Parallel) {
-        $flacFiles | ForEach-Object -Parallel {
+        $files | ForEach-Object -Parallel {
             & $using:convertAction $_ $using:total $using:Dictionary $using:outputFolder
         } -ThrottleLimit $ThrottleLimit
     }
     else {
-        foreach ($file in $flacFiles) {
+        foreach ($file in $files) {
             $index++
             $percent = [math]::Round(($index / $total) * 100, 2)
-            Write-Progress -Activity "Converting FLAC files" -Status "$index/$total ($percent%)" -PercentComplete $percent
+            Write-Progress -Activity "Processing audio files" -Status "$index/$total ($percent%)" -PercentComplete $percent
             & $convertAction $file $total $Dictionary $outputFolder
         }
     }
 
-    Write-Progress -Activity "Converting FLAC files" -Completed
+    # ──────────────────────────────────────────────────────────────
+    # 7. Summary
+    # ──────────────────────────────────────────────────────────────
+    Write-Progress -Activity "Processing audio files" -Completed
     Write-Host "──────────────────────────────────────────────" -ForegroundColor DarkGray
     Write-Host "✅ Conversion complete. Files saved in: $outputFolder" -ForegroundColor Green
 }
 
-Set-Alias -Name Flac2Mp3 -Value Convert-FlacToMp3
+# ──────────────────────────────────────────────────────────────
+# Alias for convenience
+# ──────────────────────────────────────────────────────────────
+Set-Alias -Name Flac2Mp3 -Value Convert-FlacToMp3 -Description "FLAC→MP3 converter with capitalization & per-folder covers"
