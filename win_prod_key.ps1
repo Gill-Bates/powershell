@@ -33,3 +33,4 @@ function Get-WinActivationKey {
     return
 }
 
+Get-WinActivationKey
