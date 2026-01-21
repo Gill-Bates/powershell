@@ -10,10 +10,9 @@ param(
     [string]$Root = (Get-Location).Path,
     [string]$Output,
     [switch]$IncludeSecrets,
-    [switch]$StrictExtensions  # Only known extensions, otherwise all text files
+    [switch]$StrictExtensions
 )
 
-# Configuration (only used with -StrictExtensions)
 $INCLUDE_EXTS = @(
     ".py", ".ps1", ".psm1", ".psd1",
     ".txt", ".md", ".yaml", ".yml", 
@@ -64,7 +63,6 @@ function Test-SecretFile {
 function Test-IncludedFile {
     param([string]$FilePath)
     
-    # Without -StrictExtensions: allow all (binary check comes later)
     if (-not $StrictExtensions) {
         return $true
     }
@@ -91,17 +89,12 @@ function Test-BinaryFile {
         
         $sample = $buffer[0..($bytesRead - 1)]
         
-        # Detect UTF-16 BOM (not binary)
         if ($bytesRead -ge 2) {
-            # UTF-16 LE
             if ($sample[0] -eq 0xFF -and $sample[1] -eq 0xFE) { return $false }
-            # UTF-16 BE
             if ($sample[0] -eq 0xFE -and $sample[1] -eq 0xFF) { return $false }
-            # UTF-8 BOM
             if ($bytesRead -ge 3 -and $sample[0] -eq 0xEF -and $sample[1] -eq 0xBB -and $sample[2] -eq 0xBF) { return $false }
         }
         
-        # Count non-printable bytes (except Tab, LF, CR)
         $nonPrintable = 0
         foreach ($b in $sample) {
             if ($b -lt 9 -or ($b -gt 13 -and $b -lt 32)) {
@@ -109,7 +102,6 @@ function Test-BinaryFile {
             }
         }
         
-        # More than 30% non-printable -> Binary
         return ($nonPrintable / $bytesRead) -gt 0.3
     }
     catch {
@@ -133,18 +125,25 @@ function Get-SafeFileContent {
             return @{ Content = ""; Reason = "binary" }
         }
         
-        # Encoding-Fallback: UTF-8 → Unicode → Default
         $content = $null
         try {
             $content = Get-Content -LiteralPath $FilePath -Raw -Encoding UTF8 -ErrorAction Stop
-        } catch {
+        }
+        catch {
             try {
                 $content = Get-Content -LiteralPath $FilePath -Raw -Encoding Unicode -ErrorAction Stop
-            } catch {
+            }
+            catch {
                 try {
-                    $content = Get-Content -LiteralPath $FilePath -Raw -ErrorAction Stop
-                } catch {
-                    return @{ Content = ""; Reason = "encoding_error" }
+                    $content = Get-Content -LiteralPath $FilePath -Raw -Encoding UTF7 -ErrorAction Stop
+                }
+                catch {
+                    try {
+                        $content = Get-Content -LiteralPath $FilePath -Raw -ErrorAction Stop
+                    }
+                    catch {
+                        return @{ Content = ""; Reason = "encoding_error" }
+                    }
                 }
             }
         }
@@ -152,9 +151,11 @@ function Get-SafeFileContent {
         if ($null -eq $content) { $content = "" }
         return @{ Content = $content; Reason = $null }
         
-    } catch [System.UnauthorizedAccessException] {
+    }
+    catch [System.UnauthorizedAccessException] {
         return @{ Content = ""; Reason = "permission_denied" }
-    } catch {
+    }
+    catch {
         return @{ Content = ""; Reason = "read_error: $($_.Exception.GetType().Name)" }
     }
 }
@@ -162,7 +163,6 @@ function Get-SafeFileContent {
 function Get-TreeLines {
     param([string[]]$Files)
     
-    # Build tree structure
     $tree = @{ _files = [System.Collections.ArrayList]::new(); _dirs = @{} }
     
     foreach ($file in $Files) {
@@ -191,7 +191,7 @@ function Get-TreeLines {
         $dirs = $Node._dirs.Keys | Sort-Object
         $files = $Node._files | Sort-Object
         $allItems = @($dirs | ForEach-Object { @{ Name = $_; IsDir = $true } }) + 
-                    @($files | ForEach-Object { @{ Name = $_; IsDir = $false } })
+        @($files | ForEach-Object { @{ Name = $_; IsDir = $false } })
         
         for ($i = 0; $i -lt $allItems.Count; $i++) {
             $item = $allItems[$i]
@@ -200,7 +200,8 @@ function Get-TreeLines {
             if ($isLast) {
                 $connector = "└── "
                 $childPrefix = "$Prefix    "
-            } else {
+            }
+            else {
                 $connector = "├── "
                 $childPrefix = "$Prefix│   "
             }
@@ -208,7 +209,8 @@ function Get-TreeLines {
             if ($item.IsDir) {
                 [void]$lines.Add("$Prefix$connector$($item.Name)/")
                 Write-Tree -Node $Node._dirs[$item.Name] -Prefix $childPrefix
-            } else {
+            }
+            else {
                 [void]$lines.Add("$Prefix$connector$($item.Name)")
             }
         }
@@ -225,7 +227,6 @@ function Get-Banner {
     return "$line`n$Title`n$line`n"
 }
 
-# Main logic
 $rootPath = (Resolve-Path $Root).Path
 if (-not (Test-Path -LiteralPath $rootPath -PathType Container)) {
     Write-Error "Error: $rootPath is not a directory"
@@ -237,42 +238,39 @@ if ([string]::IsNullOrEmpty($projectName)) { $projectName = "workspace" }
 
 if ($Output) {
     $outFile = $Output
-} else {
+}
+else {
     $ts = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd_HH-mm-ss")
     $outFile = Join-Path $rootPath "full_codebase_${projectName}_${ts}.txt"
 }
 
 if ($IncludeSecrets) {
-    Write-Warning "WARNING: Including secrets/credentials in bundle!"
-    Write-Warning "   Do NOT share this file publicly!"
+    Write-Warning "WARNING: Including secrets/credentials in bundle!" -WarningAction Continue
+    Write-Warning "   Do NOT share this file publicly!" -WarningAction Continue
 }
 
-# Collect files (excluding symlink directories and reparse points)
 $allFiles = [System.Collections.ArrayList]::new()
 
-Get-ChildItem -LiteralPath $rootPath -Recurse -File -Attributes !ReparsePoint -ErrorAction SilentlyContinue | ForEach-Object {
+Get-ChildItem -LiteralPath $rootPath -Recurse -File -FollowSymlink:$false -ErrorAction SilentlyContinue |
+Where-Object { -not $_.LinkType } | ForEach-Object {
     $file = $_
-    
-    # Skip files in symlink directories
-    if ($file.Directory.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { return }
     
     $relativePath = $file.FullName.Substring($rootPath.Length).TrimStart('\', '/')
     
-    # Check if in excluded directory
-    $inExcludedDir = $false
     $pathParts = $relativePath -split '[/\\]'
-    foreach ($part in $pathParts[0..($pathParts.Count - 2)]) {
-        if ($EXCLUDE_DIRS -contains $part) {
-            $inExcludedDir = $true
-            break
+    $inExcludedDir = $false
+    if ($pathParts.Count -gt 1) {
+        foreach ($part in $pathParts[0..($pathParts.Count - 2)]) {
+            if ($EXCLUDE_DIRS -contains $part.ToLower()) {
+                $inExcludedDir = $true
+                break
+            }
         }
     }
     if ($inExcludedDir) { return }
     
-    # Secret check
     if (-not $IncludeSecrets -and (Test-SecretFile -FileName $file.Name)) { return }
     
-    # Include check
     if (-not (Test-IncludedFile -FilePath $file.FullName)) { return }
     
     [void]$allFiles.Add($relativePath)
@@ -280,59 +278,59 @@ Get-ChildItem -LiteralPath $rootPath -Recurse -File -Attributes !ReparsePoint -E
 
 $allFiles = $allFiles | Sort-Object
 
-# Create tree
 $treeLines = Get-TreeLines -Files $allFiles
 
-# Write bundle (streaming instead of RAM buffer)
 $skippedCount = 0
 $totalBytes = 0
+$LF = "`n"
 
-# Write header
-$header = [System.Text.StringBuilder]::new()
-[void]$header.Append((Get-Banner "PROJECT: $projectName"))
-[void]$header.AppendLine("# FULL CODEBASE BUNDLE")
-[void]$header.AppendLine("# Root: $rootPath")
-[void]$header.AppendLine("# Date: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')) UTC")
-[void]$header.AppendLine("# Files: $($allFiles.Count)")
-[void]$header.AppendLine("# Secrets included: $IncludeSecrets")
-[void]$header.AppendLine("# Strict extensions: $StrictExtensions")
-[void]$header.AppendLine()
-[void]$header.AppendLine("CODE ORGANIZATION / DIRECTORY STRUCTURE")
-[void]$header.AppendLine("---------------------------------------")
-foreach ($line in $treeLines) {
-    [void]$header.AppendLine($line)
-}
-[void]$header.AppendLine()
-[void]$header.AppendLine("FILE CONTENTS")
-[void]$header.AppendLine("-------------")
-
-# Initialize file with header
-$header.ToString() | Out-File -LiteralPath $outFile -Encoding UTF8 -NoNewline
-
-# Stream files
-foreach ($rel in $allFiles) {
-    $absPath = Join-Path $rootPath $rel
-    
-    $result = Get-SafeFileContent -FilePath $absPath
-    
-    $fileHeader = "`n==================== FILE: $rel ====================`n"
-    $fileHeader | Add-Content -LiteralPath $outFile -Encoding UTF8 -NoNewline
-    
-    if ($result.Reason) {
-        "<<SKIPPED: $($result.Reason)>>`n" | Add-Content -LiteralPath $outFile -Encoding UTF8 -NoNewline
-        $skippedCount++
-    } else {
-        $content = $result.Content
-        if ($null -eq $content) { $content = "" }
-        
-        $content | Add-Content -LiteralPath $outFile -Encoding UTF8 -NoNewline
-        if (-not $content.EndsWith("`n")) {
-            "`n" | Add-Content -LiteralPath $outFile -Encoding UTF8 -NoNewline
-        }
-        $totalBytes += [System.Text.Encoding]::UTF8.GetByteCount($content)
+$enc = [System.Text.UTF8Encoding]::new($false)
+$sw = [System.IO.StreamWriter]::new($outFile, $false, $enc)
+try {
+    $sw.Write((Get-Banner "PROJECT: $projectName"))
+    $sw.Write("# FULL CODEBASE BUNDLE$LF")
+    $sw.Write("# Root: $rootPath$LF")
+    $sw.Write("# Date: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')) UTC$LF")
+    $sw.Write("# Files: $($allFiles.Count)$LF")
+    $sw.Write("# Secrets included: $IncludeSecrets$LF")
+    $sw.Write("# Strict extensions: $StrictExtensions$LF")
+    $sw.Write($LF)
+    $sw.Write("CODE ORGANIZATION / DIRECTORY STRUCTURE$LF")
+    $sw.Write("---------------------------------------$LF")
+    foreach ($line in $treeLines) {
+        $sw.Write("$line$LF")
     }
+    $sw.Write($LF)
+    $sw.Write("FILE CONTENTS$LF")
+    $sw.Write("-------------$LF")
     
-    "==================== END: $rel ====================`n" | Add-Content -LiteralPath $outFile -Encoding UTF8 -NoNewline
+    foreach ($rel in $allFiles) {
+        $absPath = Join-Path $rootPath $rel
+        
+        $result = Get-SafeFileContent -FilePath $absPath
+        
+        $sw.Write("${LF}==================== FILE: $rel ====================$LF")
+        
+        if ($result.Reason) {
+            $sw.Write("<<SKIPPED: $($result.Reason)>>$LF")
+            $skippedCount++
+        }
+        else {
+            $content = $result.Content
+            if ($null -eq $content) { $content = "" }
+            
+            $sw.Write($content)
+            if (-not $content.EndsWith($LF)) {
+                $sw.Write($LF)
+            }
+            $totalBytes += [System.Text.Encoding]::UTF8.GetByteCount($content)
+        }
+        
+        $sw.Write("==================== END: $rel ====================$LF")
+    }
+}
+finally {
+    $sw.Dispose()
 }
 
 $bundledCount = $allFiles.Count - $skippedCount
