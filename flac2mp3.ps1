@@ -147,7 +147,7 @@ function Convert-FlacToMp3 {
             $lowerPart = $part.ToLower()
 
             # 🎵 Normalize common music prefixes
-            switch -Wildcard ($lowerPart) {
+            switch ($lowerPart) {
                 "feat" { $parts[$i] = 'feat.'; continue }
                 "ft" { $parts[$i] = 'feat.'; continue }
                 "vs" { $parts[$i] = 'vs.'; continue }
@@ -160,11 +160,13 @@ function Convert-FlacToMp3 {
 
     function Get-FileMetadata($file) {
         try {
+            $json = & ffprobe -v error -show_entries format_tags=artist,title,album,date -of json -- "$($file.FullName)" | ConvertFrom-Json
+            $tags = $json.format.tags
             return @{
-                artist = (& ffprobe -v error -show_entries format_tags=artist -of default=nw=1:nk=1 -- "$($file.FullName)")
-                title  = (& ffprobe -v error -show_entries format_tags=title  -of default=nw=1:nk=1 -- "$($file.FullName)")
-                album  = (& ffprobe -v error -show_entries format_tags=album  -of default=nw=1:nk=1 -- "$($file.FullName)")
-                year   = (& ffprobe -v error -show_entries format_tags=date   -of default=nw=1:nk=1 -- "$($file.FullName)")
+                artist = $tags.artist
+                title  = $tags.title
+                album  = $tags.album
+                year   = $tags.date
             }
         }
         catch {
@@ -209,7 +211,7 @@ function Convert-FlacToMp3 {
 
     # 🖼️ Simplified Cover Art Search
     function Get-CoverArt($directory) {
-        if (-not $coverCache.ContainsKey($directory)) {
+        if (-not $script:coverCache.ContainsKey($directory)) {
             # 🔍 Simple search for image files
             $coverFiles = Get-ChildItem -Path $directory -File | Where-Object {
                 $_.Extension -match '\.(jpg|jpeg|png|bmp)$'
@@ -220,19 +222,20 @@ function Convert-FlacToMp3 {
                 $_.Name -match '^(folder|cover|front|album)'
             } | Select-Object -First 1
             
-            $coverCache[$directory] = if ($preferredCover) { $preferredCover } else { $coverFiles | Select-Object -First 1 }
+            $script:coverCache[$directory] = if ($preferredCover) { $preferredCover } else { $coverFiles | Select-Object -First 1 }
         }
-        return $coverCache[$directory]
+        return $script:coverCache[$directory]
     }
 
     function Add-CoverArt($inputFile, $outputFile, $coverArt, $artist, $title) {
-        $args = @(
+        $ffmpegArgs = @(
             "-i", $inputFile,
             "-i", $coverArt.FullName,
             "-map", "0:a", "-map", "1:v",
-            "-map_metadata", "0",  # ✅ Preserve existing metadata
+            "-map_metadata", "0",
             "-c:a", "copy",
             "-c:v", "mjpeg", "-pix_fmt", "yuvj420p",
+            "-disposition:v", "attached_pic",
             "-id3v2_version", "3",
             "-metadata", "artist=$artist",
             "-metadata", "title=$title",
@@ -241,45 +244,55 @@ function Convert-FlacToMp3 {
             "-y", "-loglevel", "error", "-hide_banner", "-nostats",
             $outputFile
         )
-        & ffmpeg @args
+        & ffmpeg @ffmpegArgs
         return $LASTEXITCODE
     }
 
-    function Convert-FlacToMp3WithCover($file, $outPath, $artist, $title, $cover) {
+    function Convert-FlacToMp3WithCover($file, $outPath, $artist, $title, $album, $year, $cover) {
         try {
-            $args = @("-i", $file.FullName)
+            $ffmpegArgs = @("-i", $file.FullName)
             if ($cover) {
-                $args += @(
+                $ffmpegArgs += @(
                     "-i", $cover.FullName,
                     "-map", "0:a", "-map", "1:v",
+                    "-map_metadata", "0",
                     "-c:v", "mjpeg", "-pix_fmt", "yuvj420p",
+                    "-disposition:v", "attached_pic",
                     "-c:a", $Codec, "-b:a", "${Bitrate}k",
                     "-id3v2_version", "3",
                     "-metadata", "artist=$artist",
-                    "-metadata", "title=$title",
+                    "-metadata", "title=$title"
+                )
+                if ($album) { $ffmpegArgs += @("-metadata", "album=$album") }
+                if ($year) { $ffmpegArgs += @("-metadata", "date=$year") }
+                $ffmpegArgs += @(
                     "-metadata:s:v", "title=Album cover",
                     "-metadata:s:v", "comment=Cover (front)"
                 )
             }
             else {
-                $args += @(
+                $ffmpegArgs += @(
                     "-map_metadata", "0",
                     "-c:a", $Codec, "-b:a", "${Bitrate}k",
                     "-id3v2_version", "3",
                     "-metadata", "artist=$artist",
                     "-metadata", "title=$title"
                 )
+                if ($album) { $ffmpegArgs += @("-metadata", "album=$album") }
+                if ($year) { $ffmpegArgs += @("-metadata", "date=$year") }
             }
-            $args += @("-loglevel", "error", "-hide_banner", "-nostats", $outPath)
-            & ffmpeg @args
+            $ffmpegArgs += @("-y", "-loglevel", "error", "-hide_banner", "-nostats", $outPath)
+            & ffmpeg @ffmpegArgs
             
-            if ($LASTEXITCODE -ne 0) { 
+            if ($LASTEXITCODE -ne 0) {
+                Remove-Item $outPath -Force -ErrorAction SilentlyContinue
                 Write-Warning "ffmpeg failed for '$($file.Name)' with exit code: $LASTEXITCODE" 
                 return $false
             }
             return $true
         }
         catch {
+            Remove-Item $outPath -Force -ErrorAction SilentlyContinue
             Write-Warning "ffmpeg exception for '$($file.Name)': $($_.Exception.Message)"
             return $false
         }
@@ -290,7 +303,7 @@ function Convert-FlacToMp3 {
     # 🎯 ============================================================================
     
     # 🖼️ Cover Art Cache
-    $coverCache = @{}
+    $script:coverCache = @{}
     
     $files = Get-ChildItem -Path $InputFolder -Include *.flac, *.mp3 -File -Recurse
     if (!$files) { 
@@ -335,6 +348,8 @@ function Convert-FlacToMp3 {
         $metadata = Get-FileMetadata $file
         $artist = if ($metadata.artist) { $metadata.artist } else { "Unknown Artist" }
         $title = if ($metadata.title) { $metadata.title }  else { [System.IO.Path]::GetFileNameWithoutExtension($file.Name) }
+        $album = $metadata.album
+        $year = $metadata.year
 
         # ✨ Normalize text
         $artist = Normalize-Title $artist
@@ -343,7 +358,7 @@ function Convert-FlacToMp3 {
 
         # 🎵 FLAC → MP3 Conversion
         if ($file.Extension -ieq ".flac") {
-            $success = Convert-FlacToMp3WithCover $file $outputPath $artist $title $coverArt
+            $success = Convert-FlacToMp3WithCover $file $outputPath $artist $title $album $year $coverArt
             if ($success) {
                 $coverInfo = if ($coverArt) { "(cover: $($coverArt.Name))" } else { "(no cover)" }
                 Write-Host "✅ CONVERTED: $artist - $title  $coverInfo" -ForegroundColor Green
@@ -355,7 +370,7 @@ function Convert-FlacToMp3 {
             }
         }
 
-        # 🔊 MP3 Processing (add cover if available)
+        # 🔊 MP3 Processing (remux with normalized metadata)
         elseif ($file.Extension -ieq ".mp3") {
             if ($coverArt) {
                 $exitCode = Add-CoverArt $file.FullName $outputPath $coverArt $artist $title
@@ -364,26 +379,34 @@ function Convert-FlacToMp3 {
                     $successCount++
                 }
                 else {
+                    Remove-Item $outputPath -Force -ErrorAction SilentlyContinue
                     Write-Warning "ffmpeg remux failed for: $($file.Name)"
-                    # 🆘 Fallback: copy without cover
-                    try {
-                        Copy-Item $file.FullName $outputPath -Force
-                        Write-Host "📋 COPIED MP3: $artist - $title (cover failed)" -ForegroundColor Yellow
+                    Write-Host "❌ FAILED: $artist - $title" -ForegroundColor Red
+                    $errorCount++
+                }
+            }
+            else {
+                # Remux through ffmpeg to apply normalized metadata
+                $ffmpegArgs = @("-i", $file.FullName, "-c", "copy", "-map_metadata", "0", "-id3v2_version", "3")
+                $ffmpegArgs += @("-metadata", "artist=$artist", "-metadata", "title=$title")
+                if ($album) { $ffmpegArgs += @("-metadata", "album=$album") }
+                if ($year) { $ffmpegArgs += @("-metadata", "date=$year") }
+                $ffmpegArgs += @("-y", "-loglevel", "error", "-hide_banner", "-nostats", $outputPath)
+                
+                try {
+                    & ffmpeg @ffmpegArgs
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Host "📋 REMUXED MP3: $artist - $title" -ForegroundColor Yellow
                         $successCount++
                     }
-                    catch {
+                    else {
+                        Remove-Item $outputPath -Force -ErrorAction SilentlyContinue
                         Write-Host "❌ FAILED: $artist - $title" -ForegroundColor Red
                         $errorCount++
                     }
                 }
-            }
-            else {
-                try {
-                    Copy-Item -Path $file.FullName -Destination $outputPath -Force
-                    Write-Host "📋 COPIED MP3: $artist - $title (no cover)" -ForegroundColor Yellow
-                    $successCount++
-                }
                 catch {
+                    Remove-Item $outputPath -Force -ErrorAction SilentlyContinue
                     Write-Host "❌ FAILED: $artist - $title" -ForegroundColor Red
                     $errorCount++
                 }
@@ -394,7 +417,7 @@ function Convert-FlacToMp3 {
         Write-Host ""
     }
 
-    # 🎯 =======================MP=====================================================
+    # 🎯 ============================================================================
     # 5. FINAL SUMMARY & STATISTICS
     # 🎯 ============================================================================
     Write-Progress -Activity "Processing Audio Files" -Completed
