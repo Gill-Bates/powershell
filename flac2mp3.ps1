@@ -227,27 +227,6 @@ function Convert-FlacToMp3 {
         return $script:coverCache[$directory]
     }
 
-    function Add-CoverArt($inputFile, $outputFile, $coverArt, $artist, $title) {
-        $ffmpegArgs = @(
-            "-i", $inputFile,
-            "-i", $coverArt.FullName,
-            "-map", "0:a", "-map", "1:v",
-            "-map_metadata", "0",
-            "-c:a", "copy",
-            "-c:v", "mjpeg", "-pix_fmt", "yuvj420p",
-            "-disposition:v", "attached_pic",
-            "-id3v2_version", "3",
-            "-metadata", "artist=$artist",
-            "-metadata", "title=$title",
-            "-metadata:s:v", "title=Album cover",
-            "-metadata:s:v", "comment=Cover (front)",
-            "-y", "-loglevel", "error", "-hide_banner", "-nostats",
-            $outputFile
-        )
-        & ffmpeg @ffmpegArgs
-        return $LASTEXITCODE
-    }
-
     function Convert-FlacToMp3WithCover($file, $outPath, $artist, $title, $album, $year, $cover) {
         try {
             $ffmpegArgs = @("-i", $file.FullName)
@@ -356,63 +335,6 @@ function Convert-FlacToMp3 {
         $title = Normalize-Title $title
         $outputPath = Build-OutputPath $artist $title $OutputFolder
 
-        # 🎵 FLAC → MP3 Conversion
-        if ($file.Extension -ieq ".flac") {
-            $success = Convert-FlacToMp3WithCover $file $outputPath $artist $title $album $year $coverArt
-            if ($success) {
-                $coverInfo = if ($coverArt) { "(cover: $($coverArt.Name))" } else { "(no cover)" }
-                Write-Host "✅ CONVERTED: $artist - $title  $coverInfo" -ForegroundColor Green
-                $successCount++
-            }
-            else {
-                Write-Host "❌ FAILED: $artist - $title" -ForegroundColor Red
-                $errorCount++
-            }
-        }
-
-        # 🔊 MP3 Processing (remux with normalized metadata)
-        elseif ($file.Extension -ieq ".mp3") {
-            if ($coverArt) {
-                $exitCode = Add-CoverArt $file.FullName $outputPath $coverArt $artist $title
-                if ($exitCode -eq 0) {
-                    Write-Host "MP3 WITH COVER: $artist - $title" -ForegroundColor Cyan
-                    $successCount++
-                }
-                else {
-                    Remove-Item $outputPath -Force -ErrorAction SilentlyContinue
-                    Write-Warning "ffmpeg remux failed for: $($file.Name)"
-                    Write-Host "❌ FAILED: $artist - $title" -ForegroundColor Red
-                    $errorCount++
-                }
-            }
-            else {
-                # Remux through ffmpeg to apply normalized metadata
-                $ffmpegArgs = @("-i", $file.FullName, "-c", "copy", "-map_metadata", "0", "-id3v2_version", "3")
-                $ffmpegArgs += @("-metadata", "artist=$artist", "-metadata", "title=$title")
-                if ($album) { $ffmpegArgs += @("-metadata", "album=$album") }
-                if ($year) { $ffmpegArgs += @("-metadata", "date=$year") }
-                $ffmpegArgs += @("-y", "-loglevel", "error", "-hide_banner", "-nostats", $outputPath)
-                
-                try {
-                    & ffmpeg @ffmpegArgs
-                    if ($LASTEXITCODE -eq 0) {
-                        Write-Host "📋 REMUXED MP3: $artist - $title" -ForegroundColor Yellow
-                        $successCount++
-                    }
-                    else {
-                        Remove-Item $outputPath -Force -ErrorAction SilentlyContinue
-                        Write-Host "❌ FAILED: $artist - $title" -ForegroundColor Red
-                        $errorCount++
-                    }
-                }
-                catch {
-                    Remove-Item $outputPath -Force -ErrorAction SilentlyContinue
-                    Write-Host "❌ FAILED: $artist - $title" -ForegroundColor Red
-                    $errorCount++
-                }
-            }
-        }
-        
         # 📝 Empty line for better readability
         Write-Host ""
     }
@@ -441,4 +363,3 @@ if (-not (Get-Alias -Name Flac2Mp3 -ErrorAction SilentlyContinue)) {
 }
 
 Write-Host "🎧 Flac2Mp3 converter loaded successfully!" -ForegroundColor Green
-Write-Host "💡 Usage: Flac2Mp3 -InputFolder 'C:\Music' -OutputFolder 'C:\Output' -Bitrate 320 -Overwrite" -ForegroundColor Cyan
