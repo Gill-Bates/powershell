@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-    FLAC → MP3 Converter (with MP3 cover tagging and capitalization)
+    FLAC - MP3 Converter (with MP3 cover tagging and capitalization)
 .DESCRIPTION
-    • Converts .flac files (recursively) to MP3 (320 kbps)
-    • Processes existing .mp3 files without re-encoding (bitstream copy)
-    • Uses per-folder cover art (jpg/jpeg/png)
-    • All output files collected flat into one folder
-    • Normalizes feat./ft./vs. usage
+    - Converts .flac files (recursively) to MP3 (320 kbps)
+    - Processes existing .mp3 files without re-encoding (bitstream copy)
+    - Uses per-folder cover art (jpg/jpeg/png)
+    - All output files collected flat into one folder
+    - Normalizes feat./ft./vs. usage
 .NOTES
     Author  : Gill Bates
     Updated : 2025-10-14
@@ -24,19 +24,19 @@ function Convert-FlacToMp3 {
         [switch]$Overwrite
     )
 
-    # 🎯 ============================================================================
+    # [SECTION] ============================================================================
     # 1. FFMPEG SETUP & VALIDATION
-    # 🎯 ============================================================================
+    # [SECTION] ============================================================================
     
     function Install-FFmpeg {
         $downloadUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
         $system32Path = "C:\Windows\System32"
         
-        # 🔐 Check if we have admin rights for System32
+        # [SECTION] Check if we have admin rights for System32
         $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
         
         if (-not $isAdmin) {
-            Write-Host "⚠️  Administrative rights required to install FFmpeg to System32" -ForegroundColor Yellow
+            Write-Host "[SECTION] Administrative rights required to install FFmpeg to System32" -ForegroundColor Yellow
             Write-Host "   Please run PowerShell as Administrator" -ForegroundColor Red
             return $false
         }
@@ -44,34 +44,34 @@ function Convert-FlacToMp3 {
         $tempZip = Join-Path $env:TEMP "ffmpeg-latest.zip"
         $tempExtract = Join-Path $env:TEMP "ffmpeg-extract"
         
-        Write-Host "📥 Downloading FFmpeg..." -ForegroundColor Yellow
+        Write-Host "[SECTION] Downloading FFmpeg..." -ForegroundColor Yellow
         
         try {
-            # 🌐 Download FFmpeg
+            # [SECTION] Download FFmpeg
             Invoke-WebRequest -Uri $downloadUrl -OutFile $tempZip
             
-            # 📦 Extract ZIP
+            # [SECTION] Extract ZIP
             if (Test-Path $tempExtract) { Remove-Item $tempExtract -Recurse -Force }
             Expand-Archive -Path $tempZip -DestinationPath $tempExtract -Force
             
-            # 🔍 Find FFmpeg binaries
+            # [SECTION] Find FFmpeg binaries
             $ffmpegDir = Get-ChildItem $tempExtract -Recurse -Directory | Where-Object { $_.Name -eq "bin" } | Select-Object -First 1
             if (-not $ffmpegDir) { throw "FFmpeg bin directory not found" }
             
-            # 💾 Copy to System32
+            # [SECTION] Copy to System32
             $binFiles = Get-ChildItem -Path $ffmpegDir.FullName -Include "ffmpeg.exe", "ffprobe.exe", "ffplay.exe" -File
             foreach ($binFile in $binFiles) {
                 $destPath = Join-Path $system32Path $binFile.Name
                 Copy-Item -Path $binFile.FullName -Destination $destPath -Force
-                Write-Host "   → Copied $($binFile.Name) to System32" -ForegroundColor Green
+                Write-Host "   - Copied $($binFile.Name) to System32" -ForegroundColor Green
             }
             
-            # 🔄 Refresh PATH
+            # [SECTION] Refresh PATH
             $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
             
-            Write-Host "✅ FFmpeg installed to System32" -ForegroundColor Green
+            Write-Host "- FFmpeg installed to System32" -ForegroundColor Green
             
-            # 🧹 Cleanup
+            # [SECTION] Cleanup
             Remove-Item $tempZip -Force -ErrorAction SilentlyContinue
             Remove-Item $tempExtract -Recurse -Force -ErrorAction SilentlyContinue
             
@@ -94,7 +94,7 @@ function Convert-FlacToMp3 {
         return $true
     }
 
-    # 🔍 Validate FFmpeg
+    # [SECTION] Validate FFmpeg
     if (-not (Test-FFmpeg)) { 
         throw "FFmpeg is required but could not be installed. Please install manually and add to PATH." 
     }
@@ -103,12 +103,12 @@ function Convert-FlacToMp3 {
         throw "Input folder not found: $InputFolder" 
     }
 
-    # 🔐 Test if we can create the output folder
+    # [SECTION] Test if we can create the output folder
     try {
         if (!(Test-Path $OutputFolder)) { 
             New-Item -ItemType Directory -Path $OutputFolder -Force | Out-Null 
         }
-        # ✏️ Test write permissions
+        # [SECTION] Test write permissions
         $testFile = Join-Path $OutputFolder "write_test.tmp"
         "test" | Out-File -FilePath $testFile -ErrorAction Stop
         Remove-Item $testFile -Force -ErrorAction SilentlyContinue
@@ -117,9 +117,9 @@ function Convert-FlacToMp3 {
         throw "Cannot write to output folder: $OutputFolder - $($_.Exception.Message)"
     }
 
-    # 🎯 ============================================================================
+    # [SECTION] ============================================================================
     # 2. HELPER FUNCTIONS
-    # 🎯 ============================================================================
+    # [SECTION] ============================================================================
 
     function Capitalize([string]$word) {
         if (-not $word) { return $word }
@@ -130,23 +130,23 @@ function Convert-FlacToMp3 {
     function Normalize-Title([string]$text) {
         if (-not $text) { return $text }
         
-        # 🔄 Replace underscores with spaces
+        # [SECTION] Replace underscores with spaces
         $normalizedText = $text -replace '_', ' '
         $parts = [regex]::Split($normalizedText, '(\W+)')
 
-        # 🎯 Find first word for capitalization
+        # [SECTION] Find first word for capitalization
         $firstWordIndex = $null
         for ($i = 0; $i -lt $parts.Count; $i++) {
             if ($parts[$i] -match "^[A-Za-z0-9']+$") { $firstWordIndex = $i; break }
         }
 
-        # ✨ Process each word part
+        # - Process each word part
         for ($i = 0; $i -lt $parts.Count; $i++) {
             $part = $parts[$i]
             if ($part -notmatch "^[A-Za-z0-9']+$") { continue }
             $lowerPart = $part.ToLower()
 
-            # 🎵 Normalize common music prefixes
+            # [SECTION] Normalize common music prefixes
             switch ($lowerPart) {
                 "feat" { $parts[$i] = 'feat.'; continue }
                 "ft" { $parts[$i] = 'feat.'; continue }
@@ -179,7 +179,7 @@ function Convert-FlacToMp3 {
         $invalidChars = [System.IO.Path]::GetInvalidFileNameChars() -join ''
         $pattern = "[{0}]" -f [regex]::Escape($invalidChars)
         $cleanName = $name -replace $pattern, ""
-        # 🧹 Remove extra spaces and trim
+        # [SECTION] Remove extra spaces and trim
         $cleanName = $cleanName -replace '\s+', ' '
         return $cleanName.Trim()
     }
@@ -188,7 +188,7 @@ function Convert-FlacToMp3 {
         $fileName = "$artist - $title.mp3"
         $fileName = Sanitize-Filename $fileName
         
-        # 🆘 Fallback if filename is too long or empty
+        # [SECTION] Fallback if filename is too long or empty
         if ([string]::IsNullOrWhiteSpace($fileName) -or $fileName -eq ".mp3") {
             $hash = (Get-Date).Ticks.ToString()
             $fileName = "track_$hash.mp3"
@@ -196,7 +196,7 @@ function Convert-FlacToMp3 {
         
         $outputPath = Join-Path $folder $fileName
         
-        # 🔢 Handle duplicates if not overwriting
+        # [SECTION] Handle duplicates if not overwriting
         if ((-not $Overwrite) -and (Test-Path $outputPath)) {
             $counter = 1
             $baseName = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
@@ -209,15 +209,15 @@ function Convert-FlacToMp3 {
         return $outputPath
     }
 
-    # 🖼️ Simplified Cover Art Search
+    # ?[SECTION] Simplified Cover Art Search
     function Get-CoverArt($directory) {
         if (-not $script:coverCache.ContainsKey($directory)) {
-            # 🔍 Simple search for image files
+            # [SECTION] Simple search for image files
             $coverFiles = Get-ChildItem -Path $directory -File | Where-Object {
                 $_.Extension -match '\.(jpg|jpeg|png|bmp)$'
             }
             
-            # ⭐ Prefer standard cover names
+            # - Prefer standard cover names
             $preferredCover = $coverFiles | Where-Object {
                 $_.Name -match '^(folder|cover|front|album)'
             } | Select-Object -First 1
@@ -277,89 +277,130 @@ function Convert-FlacToMp3 {
         }
     }
 
-    # 🎯 ============================================================================
+    # [SECTION] ============================================================================
     # 3. PREPARATION & INITIALIZATION
-    # 🎯 ============================================================================
+    # [SECTION] ============================================================================
     
-    # 🖼️ Cover Art Cache
+    # ?[SECTION] Cover Art Cache
     $script:coverCache = @{}
     
     $files = Get-ChildItem -Path $InputFolder -Include *.flac, *.mp3 -File -Recurse
     if (!$files) { 
-        Write-Host "❌ No audio files found." -ForegroundColor Red
+        Write-Host "- No audio files found." -ForegroundColor Red
         return 
     }
     
     if ($Overwrite) {
-        Write-Host "⚠️ Overwrite mode enabled - existing files will be replaced" -ForegroundColor Yellow
+        Write-Host "[SECTION] Overwrite mode enabled - existing files will be replaced" -ForegroundColor Yellow
     }
 
-    Write-Host "🎯 ============================================================================" -ForegroundColor DarkGray
-    Write-Host "🎧  STARTING CONVERSION PROCESS" -ForegroundColor Cyan
-    Write-Host "📁 Input Folder : $InputFolder"
-    Write-Host "💾 Output Folder: $OutputFolder"
-    Write-Host "⚡ Bitrate: ${Bitrate}k | Codec: $Codec"
-    Write-Host "📊 Total Files: $($files.Count)"
-    Write-Host "🎯 ============================================================================" -ForegroundColor DarkGray
+    Write-Host "[SECTION] ============================================================================" -ForegroundColor DarkGray
+    Write-Host "[SECTION] STARTING CONVERSION PROCESS" -ForegroundColor Cyan
+    Write-Host "[SECTION] Input Folder : $InputFolder"
+    Write-Host "[SECTION] Output Folder: $OutputFolder"
+    Write-Host "- Bitrate: ${Bitrate}k | Codec: $Codec"
+    Write-Host "[SECTION] Total Files: $($files.Count)"
+    Write-Host "[SECTION] ============================================================================" -ForegroundColor DarkGray
 
     $totalFiles = $files.Count
     $processedCount = 0
     $successCount = 0
     $errorCount = 0
 
-    # 🎯 ============================================================================
+    # [SECTION] ============================================================================
     # 4. FILE PROCESSING LOOP
-    # 🎯 ============================================================================
+    # [SECTION] ============================================================================
     foreach ($file in $files) {
         $processedCount++
         $percentComplete = [math]::Round(($processedCount / $totalFiles) * 100, 2)
         
-        # 📊 Progress Bar (bottom of console)
+        # [SECTION] Progress Bar (bottom of console)
         Write-Progress -Activity "Processing Audio Files" -Status "$processedCount/$totalFiles ($percentComplete%) - $($file.Name)" -PercentComplete $percentComplete
 
-        # ℹ️ Processing information (top of console)
-        Write-Host "🔍 Processing: $($file.Name)" -ForegroundColor Gray
+        # [SECTION] Processing information (top of console)
+        Write-Host "[SECTION] Processing: $($file.Name)" -ForegroundColor Gray
 
-        # 🖼️ Per-folder cover detection (cached)
+        # ?[SECTION] Per-folder cover detection (cached)
         $coverArt = Get-CoverArt $file.DirectoryName
 
-        # 📝 Extract metadata
+        # [SECTION] Extract metadata
         $metadata = Get-FileMetadata $file
         $artist = if ($metadata.artist) { $metadata.artist } else { "Unknown Artist" }
         $title = if ($metadata.title) { $metadata.title }  else { [System.IO.Path]::GetFileNameWithoutExtension($file.Name) }
         $album = $metadata.album
         $year = $metadata.year
 
-        # ✨ Normalize text
+        # - Normalize text
         $artist = Normalize-Title $artist
         $title = Normalize-Title $title
         $outputPath = Build-OutputPath $artist $title $OutputFolder
 
-        # 📝 Empty line for better readability
+        # [SECTION] FLAC - MP3
+        if ($file.Extension -ieq ".flac") {
+            $success = Convert-FlacToMp3WithCover $file $outputPath $artist $title $album $year $coverArt
+            if ($success) {
+                Write-Host "- CONVERTED: $artist - $title" -ForegroundColor Green
+                $successCount++
+            }
+            else {
+                Write-Host "- FAILED: $artist - $title" -ForegroundColor Red
+                $errorCount++
+            }
+        }
+        # [SECTION] MP3
+        elseif ($file.Extension -ieq ".mp3") {
+            $ffmpegArgs = @(
+                "-i", $file.FullName,
+                "-c", "copy",
+                "-map_metadata", "0",
+                "-id3v2_version", "3",
+                "-metadata", "artist=$artist",
+                "-metadata", "title=$title",
+                "-y", "-loglevel", "error", "-hide_banner", "-nostats",
+                $outputPath
+            )
+
+            try {
+                & ffmpeg @ffmpegArgs
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host "[SECTION] REMUXED MP3: $artist - $title" -ForegroundColor Yellow
+                    $successCount++
+                }
+                else {
+                    Remove-Item $outputPath -Force -ErrorAction SilentlyContinue
+                    Write-Host "- FAILED: $artist - $title" -ForegroundColor Red
+                    $errorCount++
+                }
+            }
+            catch {
+                Remove-Item $outputPath -Force -ErrorAction SilentlyContinue
+                Write-Host "- FAILED: $artist - $title" -ForegroundColor Red
+                $errorCount++
+            }
+        }
+
         Write-Host ""
     }
 
-    # 🎯 ============================================================================
+    # [SECTION] ============================================================================
     # 5. FINAL SUMMARY & STATISTICS
-    # 🎯 ============================================================================
+    # [SECTION] ============================================================================
     Write-Progress -Activity "Processing Audio Files" -Completed
     
-    Write-Host "🎯 ============================================================================" -ForegroundColor DarkGray
+    Write-Host "[SECTION] ============================================================================" -ForegroundColor DarkGray
     if ($errorCount -eq 0) {
-        Write-Host "🎉 CONVERSION COMPLETE! $successCount/$totalFiles files processed successfully." -ForegroundColor Green
+        Write-Host "[SECTION] CONVERSION COMPLETE! $successCount/$totalFiles files processed successfully." -ForegroundColor Green
     }
     else {
-        Write-Host "⚠️  CONVERSION COMPLETED WITH $errorCount ERRORS. $successCount/$totalFiles files processed successfully." -ForegroundColor Yellow
+        Write-Host "[SECTION] CONVERSION COMPLETED WITH $errorCount ERRORS. $successCount/$totalFiles files processed successfully." -ForegroundColor Yellow
     }
-    Write-Host "📁 Output Location: $OutputFolder" -ForegroundColor Cyan
-    Write-Host "🎯 ============================================================================" -ForegroundColor DarkGray
+    Write-Host "[SECTION] Output Location: $OutputFolder" -ForegroundColor Cyan
+    Write-Host "[SECTION] ============================================================================" -ForegroundColor DarkGray
 }
 
-# 🎯 ============================================================================
+# [SECTION] ============================================================================
 # ALIAS FOR CONVENIENCE (with duplicate check)
-# 🎯 ============================================================================
+# [SECTION] ============================================================================
 if (-not (Get-Alias -Name Flac2Mp3 -ErrorAction SilentlyContinue)) {
-    Set-Alias -Name Flac2Mp3 -Value Convert-FlacToMp3 -Description "FLAC→MP3 converter with cover art support"
+    Set-Alias -Name Flac2Mp3 -Value Convert-FlacToMp3 -Description "FLAC?MP3 converter with cover art support"
 }
-
-Write-Host "🎧 Flac2Mp3 converter loaded successfully!" -ForegroundColor Green
