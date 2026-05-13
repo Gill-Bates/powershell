@@ -9,7 +9,7 @@
     - Normalizes feat./ft./vs. usage
 .NOTES
     Author  : Gill Bates
-    Updated : 2025-10-14
+    Updated : 2026-05-13
     Requires: ffmpeg, ffprobe in PATH
 #>
 
@@ -30,17 +30,11 @@ function Convert-FlacToMp3 {
     
     function Install-FFmpeg {
         $downloadUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
-        $system32Path = "C:\Windows\System32"
+        $installDir = Join-Path $env:LOCALAPPDATA "Programs\FFmpeg\bin"
         
-        # [SECTION] Check if we have admin rights for System32
-        $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
+        # [SECTION] Create install directory
+        if (!(Test-Path $installDir)) { New-Item -ItemType Directory -Path $installDir -Force | Out-Null }
         
-        if (-not $isAdmin) {
-            Write-Host "[SECTION] Administrative rights required to install FFmpeg to System32" -ForegroundColor Yellow
-            Write-Host "   Please run PowerShell as Administrator" -ForegroundColor Red
-            return $false
-        }
-
         $tempZip = Join-Path $env:TEMP "ffmpeg-latest.zip"
         $tempExtract = Join-Path $env:TEMP "ffmpeg-extract"
         
@@ -58,18 +52,22 @@ function Convert-FlacToMp3 {
             $ffmpegDir = Get-ChildItem $tempExtract -Recurse -Directory | Where-Object { $_.Name -eq "bin" } | Select-Object -First 1
             if (-not $ffmpegDir) { throw "FFmpeg bin directory not found" }
             
-            # [SECTION] Copy to System32
+            # [SECTION] Copy to local app data
             $binFiles = Get-ChildItem -Path $ffmpegDir.FullName -Include "ffmpeg.exe", "ffprobe.exe", "ffplay.exe" -File
             foreach ($binFile in $binFiles) {
-                $destPath = Join-Path $system32Path $binFile.Name
+                $destPath = Join-Path $installDir $binFile.Name
                 Copy-Item -Path $binFile.FullName -Destination $destPath -Force
-                Write-Host "   - Copied $($binFile.Name) to System32" -ForegroundColor Green
+                Write-Host "   - Copied $($binFile.Name) to $installDir" -ForegroundColor Green
             }
             
-            # [SECTION] Refresh PATH
-            $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+            # [SECTION] Add to user PATH
+            $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
+            if ($currentPath -notlike "*$installDir*") {
+                [Environment]::SetEnvironmentVariable("Path", "$currentPath;$installDir", "User")
+                $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+            }
             
-            Write-Host "- FFmpeg installed to System32" -ForegroundColor Green
+            Write-Host "- FFmpeg installed to $installDir" -ForegroundColor Green
             
             # [SECTION] Cleanup
             Remove-Item $tempZip -Force -ErrorAction SilentlyContinue
@@ -123,8 +121,7 @@ function Convert-FlacToMp3 {
 
     function Capitalize([string]$word) {
         if (-not $word) { return $word }
-        $lowerWord = $word.ToLower()
-        return ($lowerWord.Substring(0, 1).ToUpper() + $lowerWord.Substring(1))
+        return [regex]::Replace($word.ToLower(), '^.', { $args[0].Value.ToUpper() })
     }
 
     function Normalize-Title([string]$text) {
@@ -133,12 +130,6 @@ function Convert-FlacToMp3 {
         # [SECTION] Replace underscores with spaces
         $normalizedText = $text -replace '_', ' '
         $parts = [regex]::Split($normalizedText, '(\W+)')
-
-        # [SECTION] Find first word for capitalization
-        $firstWordIndex = $null
-        for ($i = 0; $i -lt $parts.Count; $i++) {
-            if ($parts[$i] -match "^[A-Za-z0-9']+$") { $firstWordIndex = $i; break }
-        }
 
         # - Process each word part
         for ($i = 0; $i -lt $parts.Count; $i++) {
@@ -160,7 +151,9 @@ function Convert-FlacToMp3 {
 
     function Get-FileMetadata($file) {
         try {
-            $json = & ffprobe -v error -show_entries format_tags=artist,title,album,date -of json -- "$($file.FullName)" | ConvertFrom-Json
+            $jsonText = & ffprobe -v error -show_entries format_tags=artist,title,album,date -of json -- "$($file.FullName)" 2>$null
+            if ($LASTEXITCODE -ne 0) { return @{} }
+            $json = $jsonText | ConvertFrom-Json
             $tags = $json.format.tags
             return @{
                 artist = $tags.artist
@@ -185,36 +178,27 @@ function Convert-FlacToMp3 {
     }
 
     function Build-OutputPath($artist, $title, $folder) {
-        $fileName = "$artist - $title.mp3"
-        $fileName = Sanitize-Filename $fileName
+        $baseName = Sanitize-Filename "$artist - $title"
+        if ([string]::IsNullOrWhiteSpace($baseName)) { $baseName = "track_$((Get-Date).Ticks)" }
         
-        # [SECTION] Fallback if filename is too long or empty
-        if ([string]::IsNullOrWhiteSpace($fileName) -or $fileName -eq ".mp3") {
-            $hash = (Get-Date).Ticks.ToString()
-            $fileName = "track_$hash.mp3"
-        }
-        
+        $fileName = "$baseName.mp3"
         $outputPath = Join-Path $folder $fileName
-        
-        # [SECTION] Handle duplicates if not overwriting
-        if ((-not $Overwrite) -and (Test-Path $outputPath)) {
-            $counter = 1
-            $baseName = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
-            $extension = [System.IO.Path]::GetExtension($fileName)
-            while (Test-Path $outputPath) {
-                $outputPath = Join-Path $folder ("$baseName ($counter)$extension")
-                $counter++
-            }
+
+        # [SECTION] Handle duplicates in current run and existing files
+        $counter = 1
+        while (($script:usedNames.Contains($outputPath)) -or ((-not $Overwrite) -and (Test-Path $outputPath))) {
+            $outputPath = Join-Path $folder "$baseName ($counter).mp3"
+            $counter++
         }
+        [void]$script:usedNames.Add($outputPath)
         return $outputPath
     }
 
-    # ?[SECTION] Simplified Cover Art Search
     function Get-CoverArt($directory) {
         if (-not $script:coverCache.ContainsKey($directory)) {
             # [SECTION] Simple search for image files
             $coverFiles = Get-ChildItem -Path $directory -File | Where-Object {
-                $_.Extension -match '\.(jpg|jpeg|png|bmp)$'
+                $_.Extension.ToLower() -in '.jpg', '.jpeg', '.png', '.bmp'
             }
             
             # - Prefer standard cover names
@@ -227,55 +211,70 @@ function Convert-FlacToMp3 {
         return $script:coverCache[$directory]
     }
 
-    function Convert-FlacToMp3WithCover($file, $outPath, $artist, $title, $album, $year, $cover) {
+    function Build-FFmpegArguments {
+        param(
+            [Parameter(Mandatory)][System.IO.FileInfo]$Source,
+            [Parameter(Mandatory)][string]$OutputPath,
+            [hashtable]$Meta,
+            [System.IO.FileInfo]$Cover,
+            [switch]$CopyAudio,
+            [int]$Bitrate,
+            [string]$Codec
+        )
+
+        $args = @(
+            "-hide_banner", "-nostats", "-loglevel", "error",
+            "-y", "-i", $Source.FullName
+        )
+
+        # Cover mapping
+        if ($Cover) {
+            $args += @("-i", $Cover.FullName, "-map", "0:a", "-map", "1:v", "-c:v", "mjpeg")
+        } else {
+            $args += @("-map", "0:a")
+        }
+
+        # Audio codec
+        if ($CopyAudio) {
+            $args += @("-c:a", "copy")
+        } else {
+            $args += @("-c:a", $Codec, "-b:a", "${Bitrate}k")
+        }
+
+        # Metadata
+        $args += @("-map_metadata", "0", "-id3v2_version", "3")
+        foreach ($key in @('artist','title','album','date')) {
+            if ($Meta.$key) { $args += @("-metadata", "$key=$($Meta.$key)") }
+        }
+
+        # Cover disposition
+        if ($Cover) {
+            $args += @(
+                "-metadata:s:v", "title=Album cover",
+                "-metadata:s:v", "comment=Cover (front)",
+                "-disposition:v", "attached_pic"
+            )
+        }
+
+        $args += $OutputPath
+        return $args
+    }
+
+    function Invoke-FFmpeg {
+        param([array]$Arguments, [string]$OutputPath, [string]$Label)
         try {
-            $ffmpegArgs = @("-i", $file.FullName)
-            if ($cover) {
-                $ffmpegArgs += @(
-                    "-i", $cover.FullName,
-                    "-map", "0:a", "-map", "1:v",
-                    "-map_metadata", "0",
-                    "-c:v", "mjpeg", "-pix_fmt", "yuvj420p",
-                    "-disposition:v", "attached_pic",
-                    "-c:a", $Codec, "-b:a", "${Bitrate}k",
-                    "-id3v2_version", "3",
-                    "-metadata", "artist=$artist",
-                    "-metadata", "title=$title"
-                )
-                if ($album) { $ffmpegArgs += @("-metadata", "album=$album") }
-                if ($year) { $ffmpegArgs += @("-metadata", "date=$year") }
-                $ffmpegArgs += @(
-                    "-metadata:s:v", "title=Album cover",
-                    "-metadata:s:v", "comment=Cover (front)"
-                )
-            }
-            else {
-                $ffmpegArgs += @(
-                    "-map_metadata", "0",
-                    "-c:a", $Codec, "-b:a", "${Bitrate}k",
-                    "-id3v2_version", "3",
-                    "-metadata", "artist=$artist",
-                    "-metadata", "title=$title"
-                )
-                if ($album) { $ffmpegArgs += @("-metadata", "album=$album") }
-                if ($year) { $ffmpegArgs += @("-metadata", "date=$year") }
-            }
-            $ffmpegArgs += @("-y", "-loglevel", "error", "-hide_banner", "-nostats", $outPath)
-            & ffmpeg @ffmpegArgs
-            
-            if ($LASTEXITCODE -ne 0) {
-                Remove-Item $outPath -Force -ErrorAction SilentlyContinue
-                Write-Warning "ffmpeg failed for '$($file.Name)' with exit code: $LASTEXITCODE" 
-                return $false
-            }
+            & ffmpeg @Arguments
+            if ($LASTEXITCODE -ne 0) { throw "Exit code $LASTEXITCODE" }
             return $true
         }
         catch {
-            Remove-Item $outPath -Force -ErrorAction SilentlyContinue
-            Write-Warning "ffmpeg exception for '$($file.Name)': $($_.Exception.Message)"
+            if (Test-Path $OutputPath) { Remove-Item $OutputPath -Force -ErrorAction SilentlyContinue }
+            Write-Warning "ffmpeg failed for '$Label': $_"
             return $false
         }
     }
+
+
 
     # [SECTION] ============================================================================
     # 3. PREPARATION & INITIALIZATION
@@ -283,8 +282,12 @@ function Convert-FlacToMp3 {
     
     # ?[SECTION] Cover Art Cache
     $script:coverCache = @{}
+    $script:usedNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     
-    $files = Get-ChildItem -Path $InputFolder -Include *.flac, *.mp3 -File -Recurse
+    $files = @(
+        Get-ChildItem -LiteralPath $InputFolder -Filter '*.flac' -File -Recurse
+        Get-ChildItem -LiteralPath $InputFolder -Filter '*.mp3' -File -Recurse
+    ) | Sort-Object FullName
     if (!$files) { 
         Write-Host "- No audio files found." -ForegroundColor Red
         return 
@@ -335,48 +338,28 @@ function Convert-FlacToMp3 {
         $title = Normalize-Title $title
         $outputPath = Build-OutputPath $artist $title $OutputFolder
 
-        # [SECTION] FLAC - MP3
-        if ($file.Extension -ieq ".flac") {
-            $success = Convert-FlacToMp3WithCover $file $outputPath $artist $title $album $year $coverArt
-            if ($success) {
-                Write-Host "- CONVERTED: $artist - $title" -ForegroundColor Green
-                $successCount++
-            }
-            else {
-                Write-Host "- FAILED: $artist - $title" -ForegroundColor Red
-                $errorCount++
-            }
+        # [SECTION] Build metadata hashtable
+        $meta = @{
+            artist = $artist
+            title  = $title
+            album  = $album
+            date   = $year
         }
-        # [SECTION] MP3
-        elseif ($file.Extension -ieq ".mp3") {
-            $ffmpegArgs = @(
-                "-i", $file.FullName,
-                "-c", "copy",
-                "-map_metadata", "0",
-                "-id3v2_version", "3",
-                "-metadata", "artist=$artist",
-                "-metadata", "title=$title",
-                "-y", "-loglevel", "error", "-hide_banner", "-nostats",
-                $outputPath
-            )
 
-            try {
-                & ffmpeg @ffmpegArgs
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Host "[SECTION] REMUXED MP3: $artist - $title" -ForegroundColor Yellow
-                    $successCount++
-                }
-                else {
-                    Remove-Item $outputPath -Force -ErrorAction SilentlyContinue
-                    Write-Host "- FAILED: $artist - $title" -ForegroundColor Red
-                    $errorCount++
-                }
-            }
-            catch {
-                Remove-Item $outputPath -Force -ErrorAction SilentlyContinue
-                Write-Host "- FAILED: $artist - $title" -ForegroundColor Red
-                $errorCount++
-            }
+        $isMp3 = $file.Extension -ieq ".mp3"
+        $ffmpegArgs = Build-FFmpegArguments -Source $file -OutputPath $outputPath `
+            -Meta $meta -Cover $coverArt -CopyAudio:$isMp3 `
+            -Bitrate $Bitrate -Codec $Codec
+
+        $success = Invoke-FFmpeg -Arguments $ffmpegArgs -OutputPath $outputPath -Label $file.Name
+        if ($success) {
+            $action = if ($isMp3) { "REMUXED MP3" } else { "CONVERTED" }
+            Write-Host "- $action`: $artist - $title" -ForegroundColor Green
+            $successCount++
+        }
+        else {
+            Write-Host "- FAILED: $artist - $title" -ForegroundColor Red
+            $errorCount++
         }
 
         Write-Host ""
