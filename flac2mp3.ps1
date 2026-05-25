@@ -28,73 +28,15 @@ function Convert-FlacToMp3 {
     # 1. FFMPEG SETUP & VALIDATION
     # [SECTION] ============================================================================
     
-    function Install-FFmpeg {
-        $downloadUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
-        $installDir = Join-Path $env:LOCALAPPDATA "Programs\FFmpeg\bin"
-        
-        # [SECTION] Create install directory
-        if (!(Test-Path $installDir)) { New-Item -ItemType Directory -Path $installDir -Force | Out-Null }
-        
-        $tempZip = Join-Path $env:TEMP "ffmpeg-latest.zip"
-        $tempExtract = Join-Path $env:TEMP "ffmpeg-extract"
-        
-        Write-Host "[SECTION] Downloading FFmpeg..." -ForegroundColor Yellow
-        
-        try {
-            # [SECTION] Download FFmpeg
-            Invoke-WebRequest -Uri $downloadUrl -OutFile $tempZip
-            
-            # [SECTION] Extract ZIP
-            if (Test-Path $tempExtract) { Remove-Item $tempExtract -Recurse -Force }
-            Expand-Archive -Path $tempZip -DestinationPath $tempExtract -Force
-            
-            # [SECTION] Find FFmpeg binaries
-            $ffmpegDir = Get-ChildItem $tempExtract -Recurse -Directory | Where-Object { $_.Name -eq "bin" } | Select-Object -First 1
-            if (-not $ffmpegDir) { throw "FFmpeg bin directory not found" }
-            
-            # [SECTION] Copy to local app data
-            $binFiles = Get-ChildItem -Path $ffmpegDir.FullName -Include "ffmpeg.exe", "ffprobe.exe", "ffplay.exe" -File
-            foreach ($binFile in $binFiles) {
-                $destPath = Join-Path $installDir $binFile.Name
-                Copy-Item -Path $binFile.FullName -Destination $destPath -Force
-                Write-Host "   - Copied $($binFile.Name) to $installDir" -ForegroundColor Green
-            }
-            
-            # [SECTION] Add to user PATH
-            $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
-            if ($currentPath -notlike "*$installDir*") {
-                [Environment]::SetEnvironmentVariable("Path", "$currentPath;$installDir", "User")
-                $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
-            }
-            
-            Write-Host "- FFmpeg installed to $installDir" -ForegroundColor Green
-            
-            # [SECTION] Cleanup
-            Remove-Item $tempZip -Force -ErrorAction SilentlyContinue
-            Remove-Item $tempExtract -Recurse -Force -ErrorAction SilentlyContinue
-            
-            return $true
-        }
-        catch {
-            Write-Error "Failed to install FFmpeg: $($_.Exception.Message)"
-            return $false
-        }
-    }
-
     function Test-FFmpeg {
         $ffmpegOk = Get-Command ffmpeg -ErrorAction SilentlyContinue
         $ffprobeOk = Get-Command ffprobe -ErrorAction SilentlyContinue
-        
-        if (-not ($ffmpegOk -and $ffprobeOk)) {
-            Write-Host "FFmpeg not found in PATH. Attempting to install..." -ForegroundColor Yellow
-            return Install-FFmpeg
-        }
-        return $true
+        return ($ffmpegOk -and $ffprobeOk)
     }
 
     # [SECTION] Validate FFmpeg
     if (-not (Test-FFmpeg)) { 
-        throw "FFmpeg is required but could not be installed. Please install manually and add to PATH." 
+        throw "FFmpeg is required. Please install ffmpeg/ffprobe and add them to PATH." 
     }
 
     if (-not (Test-Path $InputFolder)) { 
@@ -103,13 +45,17 @@ function Convert-FlacToMp3 {
 
     # [SECTION] Test if we can create the output folder
     try {
-        if (!(Test-Path $OutputFolder)) { 
+        if (!(Test-Path -LiteralPath $OutputFolder)) { 
             New-Item -ItemType Directory -Path $OutputFolder -Force | Out-Null 
         }
         # [SECTION] Test write permissions
-        $testFile = Join-Path $OutputFolder "write_test.tmp"
-        "test" | Out-File -FilePath $testFile -ErrorAction Stop
-        Remove-Item $testFile -Force -ErrorAction SilentlyContinue
+        $testFile = Join-Path $OutputFolder ([System.IO.Path]::GetRandomFileName())
+        try {
+            [System.IO.File]::WriteAllText($testFile, "test")
+        }
+        finally {
+            Remove-Item -LiteralPath $testFile -Force -ErrorAction SilentlyContinue
+        }
     }
     catch {
         throw "Cannot write to output folder: $OutputFolder - $($_.Exception.Message)"
@@ -260,15 +206,39 @@ function Convert-FlacToMp3 {
         return $args
     }
 
+    function Assert-SafeOutputPath {
+        param(
+            [Parameter(Mandatory)][System.IO.FileInfo]$Source,
+            [Parameter(Mandatory)][string]$OutputPath
+        )
+
+        $sourceFull = [System.IO.Path]::GetFullPath($Source.FullName)
+        $outputFull = [System.IO.Path]::GetFullPath($OutputPath)
+
+        if ([string]::Equals($sourceFull, $outputFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to overwrite source file: $sourceFull"
+        }
+    }
+
     function Invoke-FFmpeg {
-        param([array]$Arguments, [string]$OutputPath, [string]$Label)
+        param([array]$Arguments, [string]$OutputPath, [string]$Label, [string]$SourcePath)
         try {
             & ffmpeg @Arguments
             if ($LASTEXITCODE -ne 0) { throw "Exit code $LASTEXITCODE" }
             return $true
         }
         catch {
-            if (Test-Path $OutputPath) { Remove-Item $OutputPath -Force -ErrorAction SilentlyContinue }
+            if (
+                $OutputPath -and
+                (Test-Path -LiteralPath $OutputPath) -and
+                -not [string]::Equals(
+                    [System.IO.Path]::GetFullPath($OutputPath),
+                    [System.IO.Path]::GetFullPath($SourcePath),
+                    [System.StringComparison]::OrdinalIgnoreCase
+                )
+            ) {
+                Remove-Item -LiteralPath $OutputPath -Force -ErrorAction SilentlyContinue
+            }
             Write-Warning "ffmpeg failed for '$Label': $_"
             return $false
         }
@@ -337,6 +307,7 @@ function Convert-FlacToMp3 {
         $artist = Normalize-Title $artist
         $title = Normalize-Title $title
         $outputPath = Build-OutputPath $artist $title $OutputFolder
+        Assert-SafeOutputPath -Source $file -OutputPath $outputPath
 
         # [SECTION] Build metadata hashtable
         $meta = @{
@@ -351,7 +322,7 @@ function Convert-FlacToMp3 {
             -Meta $meta -Cover $coverArt -CopyAudio:$isMp3 `
             -Bitrate $Bitrate -Codec $Codec
 
-        $success = Invoke-FFmpeg -Arguments $ffmpegArgs -OutputPath $outputPath -Label $file.Name
+        $success = Invoke-FFmpeg -Arguments $ffmpegArgs -OutputPath $outputPath -Label $file.Name -SourcePath $file.FullName
         if ($success) {
             $action = if ($isMp3) { "REMUXED MP3" } else { "CONVERTED" }
             Write-Host "- $action`: $artist - $title" -ForegroundColor Green
