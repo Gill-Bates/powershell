@@ -1,204 +1,401 @@
 <#
 .SYNOPSIS
-    Enhanced Restic Backup Script with validation, retry, and graceful interrupt handling.
+    Restic backup script for the Intenso/VeraCrypt X: backup drive.
 .DESCRIPTION
-    Executes Restic backups with configuration validation, system resource checks,
-    automatic retries, structured logging, and clean shutdown on Ctrl+C.
+    Runs a Restic backup from Z:\ to the repository on X:\ with validation,
+    explicit restic.exe path, non-interactive safe mode, repository checks,
+    mutex protection, retry handling, and safe prune gating.
 .PARAMETER Force
-    Skip mount verification prompt. Use with caution.
+    Skip the manual mount verification prompt. Required together with -Silent.
 .PARAMETER Silent
-    Suppress console output (log file still created).
+    Suppress console output. File logging remains active.
 .EXAMPLE
-    .\restic-backup.ps1 -Force
+    .\0_restic_Intenso_X_fixed_dry.ps1 -Force
 .EXAMPLE
-    .\restic-backup.ps1 -Silent
-.NOTES
-    Last Modified: 2025-10-14
-    Author: Fother Mucker (Enterprise Edition)
+    .\0_restic_Intenso_X_fixed_dry.ps1 -Force -Silent
 #>
 
+#Requires -PSEdition Core
+#Requires -Version 7.0
+
+[CmdletBinding()]
 param(
     [switch]$Force,
     [switch]$Silent
 )
 
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
 
-#Requires -PSEdition Core
-#Requires -Version 7.0
+$config = [ordered]@{
+    Source                  = "Z:\"
+    ResticExe               = "X:\_Restic\restic.exe"
+    ResticRepo              = "X:\_Restic\Repository\unraid"
+    RepoPasswordFile        = "X:\_Restic\Password\unraid.txt"
+    ResticCacheDir          = "X:\_Restic\cache"
+    LogFolder               = "X:\_Logs"
+    MinimumFreeGB           = 5
+    RetentionKeepWithinDays = 365
+    ExcludeDirectories      = @("\_CCTV") | Sort-Object
 
-#region ════════════════════════════════════════ CONFIGURATION ════════════════════════════════════════
-$config = @{
-    Source             = "Z:\"
-    ResticRepo         = "X:\_Restic\Repository\unraid"
-    RepoPasswordFile   = "X:\_Restic\Password\unraid.txt"
-    DaysBeforePrune    = 365
-    LogFolder          = "X:\_Logs"
-    ExcludeDirectories = @("\_CCTV") | Sort-Object
-    ResticEnv          = @{
-        RESTIC_REPOSITORY    = "X:\_Restic\Repository\unraid"
-        RESTIC_PASSWORD_FILE = "X:\_Restic\Password\unraid.txt"
-        RESTIC_COMPRESSION   = "auto"
-        RESTIC_CACHE_DIR     = "X:\_Restic\cache"
-    }
+    # Optional: set to e.g. "X:\.restic-intenso-unraid.marker" to verify the correct drive.
+    ExpectedMarkerFile      = $null
+
+    MaxRetries              = 3
+    RetryBaseDelaySeconds   = 5
+
+    # Safer default: a backup with unreadable source files blocks prune.
+    AllowIncompleteBackup   = $false
 }
 
-$logPath = Join-Path $config.LogFolder ("restic_unraid_" + (Get-Date -Format "yyyy-MM-dd") + ".log")
-$script:abortRequested = $false
-#endregion
+$script:AbortRequested = $false
+$script:LogPath = $null
+$script:ExitCode = 1
+$script:Mutex = $null
+$script:CancelHandler = $null
 
-#region ════════════════════════════════════════ UTILITY FUNCTIONS ════════════════════════════════════════
-function Get-Logtime { (Get-Date -Format "yyyy-MM-dd HH:mm:ss") }
+function Get-LogTime {
+    Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+}
 
 function Write-Log {
     param(
-        [Parameter(Mandatory)]
-        [string]$Message,
+        [Parameter(Mandatory)][string]$Message,
         [ValidateSet("INFO", "WARN", "ERROR", "OK", "CMD", "RESTIC", "RESTIC-ERR")]
         [string]$Level = "INFO",
         [ConsoleColor]$Color = [ConsoleColor]::Gray,
         [switch]$NoConsole
     )
-    if (-not $script:abortRequested -and -not $NoConsole) {
-        Write-Host "[$(Get-Logtime)] [$Level] $Message" -ForegroundColor $Color
+
+    $line = "[$(Get-LogTime)] [$Level] $Message"
+
+    if ($script:LogPath) {
+        try {
+            Add-Content -LiteralPath $script:LogPath -Value $line -Encoding UTF8
+        }
+        catch {
+            if (-not $Silent -and -not $NoConsole) {
+                Write-Host "[$(Get-LogTime)] [WARN] Could not write log: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    }
+
+    if (-not $Silent -and -not $NoConsole) {
+        Write-Host $line -ForegroundColor $Color
     }
 }
 
-function Handle-CtrlC {
-    Write-Log "Ctrl+C detected. Graceful shutdown..." "WARN" Yellow
-    $script:abortRequested = $true
-    try { Stop-Transcript | Out-Null } catch {}
-    Write-Log "Backup aborted by user." "ERROR" Red
-    exit 130
-}
-$null = Register-EngineEvent -SourceIdentifier ConsoleCancel -Action { Handle-CtrlC } -ErrorAction SilentlyContinue
-#endregion
+function Initialize-Logging {
+    $fileName = "restic_unraid_{0}.log" -f (Get-Date -Format "yyyy-MM-dd")
 
-#region ════════════════════════════════════════ VALIDATION & CHECKS ════════════════════════════════════════
-function Test-Configuration {
-    param($Config)
-    $errors = @()
-    if (-not (Test-Path $Config.Source)) { $errors += "Source path '$($Config.Source)' not found" }
-    if (-not (Test-Path $Config.RepoPasswordFile)) { $errors += "Password file '$($Config.RepoPasswordFile)' not found" }
-    if ($Config.DaysBeforePrune -le 0) { $errors += "DaysBeforePrune must be positive" }
-    if ($errors) { throw "Configuration errors:`n$($errors -join "`n")" }
-    Write-Log "Configuration validated." "OK" Green
+    try {
+        New-Item -ItemType Directory -Path $config.LogFolder -Force | Out-Null
+        $script:LogPath = Join-Path $config.LogFolder $fileName
+        if (-not (Test-Path -LiteralPath $script:LogPath -PathType Leaf)) {
+            New-Item -ItemType File -Path $script:LogPath -Force | Out-Null
+        }
+    }
+    catch {
+        $fallbackFolder = Join-Path $env:TEMP "restic-unraid-logs"
+        New-Item -ItemType Directory -Path $fallbackFolder -Force | Out-Null
+        $script:LogPath = Join-Path $fallbackFolder $fileName
+        if (-not (Test-Path -LiteralPath $script:LogPath -PathType Leaf)) {
+            New-Item -ItemType File -Path $script:LogPath -Force | Out-Null
+        }
+        Write-Log "Configured log folder unavailable. Using fallback log '$script:LogPath'. Error: $($_.Exception.Message)" "WARN" Yellow
+    }
+
+    Write-Log "Logging initialized: $script:LogPath" "INFO" DarkCyan
+}
+
+function Register-CancelHandler {
+    try {
+        $script:CancelHandler = [System.ConsoleCancelEventHandler] {
+            param($Sender, $EventArgs)
+            $EventArgs.Cancel = $true
+            $script:AbortRequested = $true
+            Write-Log "Ctrl+C detected. Requesting graceful shutdown..." "WARN" Yellow
+        }
+        [System.Console]::CancelKeyPress += $script:CancelHandler
+    }
+    catch {
+        Write-Log "Could not register Ctrl+C handler: $($_.Exception.Message)" "WARN" Yellow
+        $script:CancelHandler = $null
+    }
+}
+
+function Enter-BackupMutex {
+    $createdNew = $false
+    $script:Mutex = [System.Threading.Mutex]::new($true, "Global\Restic_Intenso_X_Unraid_Backup", [ref]$createdNew)
+    if (-not $createdNew) {
+        throw "Another backup run is already active."
+    }
+    Write-Log "Backup mutex acquired." "INFO" DarkCyan
+}
+
+function Close-BackupRuntime {
+    if ($script:CancelHandler) {
+        try { [System.Console]::CancelKeyPress -= $script:CancelHandler } catch {}
+        $script:CancelHandler = $null
+    }
+
+    if ($script:Mutex) {
+        try { $script:Mutex.ReleaseMutex() } catch {}
+        try { $script:Mutex.Dispose() } catch {}
+        $script:Mutex = $null
+    }
+}
+
+function Test-WritableDirectory {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    $testFile = Join-Path $Path (".write-test-{0}.tmp" -f ([guid]::NewGuid().ToString("N")))
+
+    try {
+        Set-Content -LiteralPath $testFile -Value "write-test" -Encoding UTF8
+    }
+    catch {
+        throw "$Name directory '$Path' is not writable: $($_.Exception.Message)"
+    }
+    finally {
+        Remove-Item -LiteralPath $testFile -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Test-DiskSpace {
-    param($Path, [double]$RequiredGB = 1)
-    $drive = Get-PSDrive -Name (Split-Path -Path $Path -Qualifier).TrimEnd(':')
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][double]$RequiredGB
+    )
+
+    $qualifier = Split-Path -Path $Path -Qualifier
+    if (-not $qualifier) {
+        throw "Cannot determine drive for path '$Path'."
+    }
+
+    $driveName = $qualifier.TrimEnd([char[]]@(':', '\'))
+    $drive = Get-PSDrive -Name $driveName -ErrorAction Stop
     $freeGB = [math]::Round($drive.Free / 1GB, 2)
-    if ($freeGB -lt $RequiredGB) { throw "Insufficient disk space on $($drive.Name): $freeGB GB available, $RequiredGB GB required" }
-    Write-Log "Disk space OK: $freeGB GB free on $($drive.Name)`n" "INFO" Green
+
+    if ($freeGB -lt $RequiredGB) {
+        throw "Insufficient disk space on $($drive.Name): $freeGB GB available, $RequiredGB GB required."
+    }
+
+    Write-Log "Disk space OK: $freeGB GB free on $($drive.Name)." "OK" Green
 }
 
-function Get-SystemResources {
-    $cpu = (Get-CimInstance -ClassName Win32_Processor |
-        Measure-Object -Property LoadPercentage -Average).Average
-    $memory = Get-CimInstance -ClassName Win32_OperatingSystem |
-    Select-Object @{Name = "MemoryUsage"; Expression = { (($_.TotalVisibleMemorySize - $_.FreePhysicalMemory) / $_.TotalVisibleMemorySize) * 100 } }
-    return @{
-        CPU    = [math]::Round($cpu, 2)
-        Memory = [math]::Round($memory.MemoryUsage, 2)
+function Test-Configuration {
+    $errors = [System.Collections.Generic.List[string]]::new()
+
+    if ($Silent -and -not $Force) { $errors.Add("-Silent requires -Force to avoid blocking prompts.") }
+    if (-not (Test-Path -LiteralPath $config.Source -PathType Container)) { $errors.Add("Source path '$($config.Source)' not found.") }
+    if (-not (Test-Path -LiteralPath $config.ResticExe -PathType Leaf)) { $errors.Add("Restic executable '$($config.ResticExe)' not found.") }
+    if (-not (Test-Path -LiteralPath $config.RepoPasswordFile -PathType Leaf)) { $errors.Add("Password file '$($config.RepoPasswordFile)' not found.") }
+    elseif ((Get-Item -LiteralPath $config.RepoPasswordFile).Length -le 0) { $errors.Add("Password file '$($config.RepoPasswordFile)' is empty.") }
+    if ([int]$config.RetentionKeepWithinDays -le 0) { $errors.Add("RetentionKeepWithinDays must be positive.") }
+    if ([double]$config.MinimumFreeGB -le 0) { $errors.Add("MinimumFreeGB must be positive.") }
+    if ([int]$config.MaxRetries -lt 1) { $errors.Add("MaxRetries must be at least 1.") }
+    if ($config.ExpectedMarkerFile -and -not (Test-Path -LiteralPath $config.ExpectedMarkerFile -PathType Leaf)) {
+        $errors.Add("Expected drive marker '$($config.ExpectedMarkerFile)' not found.")
+    }
+
+    if ($errors.Count -gt 0) {
+        throw "Configuration errors:`n- $($errors -join "`n- ")"
+    }
+
+    Test-WritableDirectory -Path $config.ResticCacheDir -Name "Restic cache"
+    Test-DiskSpace -Path $config.ResticRepo -RequiredGB ([double]$config.MinimumFreeGB)
+    Write-Log "Configuration validated." "OK" Green
+}
+
+function Set-ResticEnvironment {
+    $env:RESTIC_REPOSITORY = $config.ResticRepo
+    $env:RESTIC_PASSWORD_FILE = $config.RepoPasswordFile
+    $env:RESTIC_COMPRESSION = "auto"
+    $env:RESTIC_CACHE_DIR = $config.ResticCacheDir
+    Write-Log "Restic environment configured for repository '$($config.ResticRepo)'." "INFO" DarkCyan
+}
+
+function Confirm-MountReady {
+    if ($config.ExpectedMarkerFile) {
+        Write-Log "Drive marker verified: $($config.ExpectedMarkerFile)" "OK" Green
+        return
+    }
+
+    if ($Force) {
+        Write-Log "Manual mount verification skipped because -Force was specified." "WARN" Yellow
+        return
+    }
+
+    $response = Read-Host "`n[$(Get-LogTime)] [INFO] Drive mounted as 'X:' and source mounted as 'Z:'? [Y/n]"
+    if ($response -and $response -notlike "y*") {
+        throw "Mount verification failed."
     }
 }
-#endregion
 
-#region ════════════════════════════════════════ CORE FUNCTIONS ════════════════════════════════════════
-function Initialize-BackupEnvironment {
-    Write-Log "Initializing environment..." "INFO" DarkCyan
-    if (-not (Test-Path $config.LogFolder)) { New-Item -ItemType Directory -Path $config.LogFolder -Force | Out-Null }
-    if (-not ($env:Path -match [regex]::Escape("X:\_Restic"))) { $env:Path = "X:\_Restic;" + $env:Path }
-    foreach ($key in $config.ResticEnv.Keys) { Set-Item -Path "env:$key" -Value $config.ResticEnv[$key] }
+function Get-ResticExitInfo {
+    param([Parameter(Mandatory)][int]$ExitCode)
+
+    switch ($ExitCode) {
+        0 { @{ Message = "Success"; Retry = $false } }
+        3 { @{ Message = "Some source data could not be read; backup snapshot may be incomplete."; Retry = $true } }
+        10 { @{ Message = "Repository does not exist or is not initialized."; Retry = $false } }
+        11 { @{ Message = "Repository is already locked."; Retry = $true } }
+        12 { @{ Message = "Wrong repository password or password file."; Retry = $false } }
+        130 { @{ Message = "Operation was cancelled."; Retry = $false } }
+        default { @{ Message = "Restic failed with exit code $ExitCode."; Retry = $true } }
+    }
+}
+
+function Write-ResticOutput {
+    param(
+        [AllowNull()][string]$StdOut,
+        [AllowNull()][string]$StdErr,
+        [switch]$SuppressOutput
+    )
+
+    if (-not $SuppressOutput -and $StdOut) {
+        foreach ($line in ($StdOut -split '\r?\n')) {
+            if ($line -notmatch '\S') { continue }
+            if ($line -match '(?i)\b(error|failed|fatal)\b') { Write-Log $line "RESTIC" Red }
+            elseif ($line -match '(?i)\b(warn|warning)\b') { Write-Log $line "RESTIC" Yellow }
+            elseif ($line -match '(?i)\b(snapshot|repository|added|processed|files|dirs|backup)\b') { Write-Log $line "RESTIC" DarkCyan }
+            else { Write-Log $line "RESTIC" DarkGray }
+        }
+    }
+
+    if ($StdErr) {
+        foreach ($line in ($StdErr -split '\r?\n')) {
+            if ($line -match '\S') { Write-Log $line "RESTIC-ERR" Red }
+        }
+    }
 }
 
 function Invoke-ResticCommand {
     param(
-        [string]$Command,
+        [Parameter(Mandatory)][string]$Command,
         [string[]]$Arguments = @(),
-        [string]$OperationName = "Operation",
-        [switch]$SuppressOutput
+        [string]$OperationName = "Restic Operation",
+        [switch]$SuppressOutput,
+        [switch]$NoRetry
     )
 
-    if ($script:abortRequested) { return $false }
+    $attempt = 0
+    $maxAttempts = if ($NoRetry) { 1 } else { [int]$config.MaxRetries }
 
-    $maxRetries = 3; $retryCount = 0
-    do {
-        $tempOut = New-TemporaryFile; $tempErr = New-TemporaryFile; $process = $null
+    while ($attempt -lt $maxAttempts) {
+        $attempt++
+        $tempOut = New-TemporaryFile
+        $tempErr = New-TemporaryFile
+        $process = $null
+        $exitCode = $null
+
         try {
-            Write-Log "Starting $OperationName..." "INFO" DarkCyan
-            $processInfo = @{
-                FilePath               = "restic"
-                ArgumentList           = @($Command) + $Arguments
-                RedirectStandardOutput = $tempOut.FullName
-                RedirectStandardError  = $tempErr.FullName
-                NoNewWindow            = $true
-                PassThru               = $true
-            }
-            $process = Start-Process @processInfo
+            $allArgs = @($Command) + $Arguments
+            Write-Log "Starting $OperationName (attempt $attempt/$maxAttempts): restic $($allArgs -join ' ')" "CMD" DarkCyan
+
+            $process = Start-Process `
+                -FilePath $config.ResticExe `
+                -ArgumentList $allArgs `
+                -RedirectStandardOutput $tempOut.FullName `
+                -RedirectStandardError $tempErr.FullName `
+                -NoNewWindow `
+                -PassThru
+
             while (-not $process.HasExited) {
                 Start-Sleep -Milliseconds 300
-                if ($script:abortRequested) {
-                    Write-Log "Terminating Restic process..." "WARN" Yellow
+                if ($script:AbortRequested) {
                     Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-                    throw "Aborted by user"
+                    throw "Aborted by user."
                 }
             }
-            $stdout = Get-Content $tempOut.FullName -Raw -ErrorAction SilentlyContinue
-            $stderr = Get-Content $tempErr.FullName -Raw -ErrorAction SilentlyContinue
-            if (-not $SuppressOutput) {
-                $stdout -split "`n" | ForEach-Object {
-                    if ($_ -match "error|warn|failed") { Write-Log $_ "RESTIC" Red }
-                    elseif ($_ -match "snapshot|repository|added") { Write-Log $_ "RESTIC" DarkCyan }
-                    elseif ($_ -match "\S") { Write-Log $_ "RESTIC" DarkGray }
-                }
-                if ($stderr) { $stderr -split "`n" | ForEach-Object { Write-Log $_ "RESTIC-ERR" Red } }
+
+            $exitCode = [int]$process.ExitCode
+            $stdout = Get-Content -LiteralPath $tempOut.FullName -Raw -ErrorAction SilentlyContinue
+            $stderr = Get-Content -LiteralPath $tempErr.FullName -Raw -ErrorAction SilentlyContinue
+            Write-ResticOutput -StdOut $stdout -StdErr $stderr -SuppressOutput:$SuppressOutput
+
+            if ($exitCode -eq 0) {
+                Write-Log "$OperationName completed successfully." "OK" Green
+                return [pscustomobject]@{ Success = $true; ExitCode = $exitCode; StdOut = $stdout; StdErr = $stderr }
             }
-            if ($process.ExitCode -ne 0) { throw "Restic $OperationName failed with exit code $($process.ExitCode)." }
-            Write-Log "$OperationName completed successfully." "OK" Green
-            return $true
+
+            if ($Command -eq "backup" -and $exitCode -eq 3 -and [bool]$config.AllowIncompleteBackup) {
+                Write-Log "$OperationName completed with unreadable files; continuing because AllowIncompleteBackup is enabled." "WARN" Yellow
+                return [pscustomobject]@{ Success = $true; ExitCode = $exitCode; StdOut = $stdout; StdErr = $stderr }
+            }
+
+            $exitInfo = Get-ResticExitInfo -ExitCode $exitCode
+            throw $exitInfo.Message
         }
         catch {
-            $retryCount++
-            if ($retryCount -ge $maxRetries -or $script:abortRequested) {
-                Write-Log "Operation failed after $retryCount attempts: $_" "ERROR" Red
-                return $false
+            $message = $_.Exception.Message
+
+            if ($script:AbortRequested) {
+                Write-Log "$OperationName aborted." "ERROR" Red
+                return [pscustomobject]@{ Success = $false; ExitCode = 130; StdOut = $null; StdErr = $message }
             }
-            Write-Log "Retry $retryCount/$maxRetries after error: $_" "WARN" Yellow
-            Start-Sleep -Seconds (5 * $retryCount)
+
+            $retry = $false
+            if ($null -ne $exitCode) {
+                $retry = (Get-ResticExitInfo -ExitCode $exitCode).Retry
+            }
+
+            if (-not $retry -or $attempt -ge $maxAttempts) {
+                Write-Log "$OperationName failed after $attempt attempt(s): $message" "ERROR" Red
+                return [pscustomobject]@{ Success = $false; ExitCode = $exitCode; StdOut = $null; StdErr = $message }
+            }
+
+            $delay = [int]$config.RetryBaseDelaySeconds * $attempt
+            Write-Log "$OperationName failed: $message. Retrying in $delay seconds..." "WARN" Yellow
+            Start-Sleep -Seconds $delay
         }
         finally {
-            if ($process) { try { if (-not $process.HasExited) { $process.Kill() } $process.Dispose() } catch {} }
-            Remove-Item $tempOut, $tempErr -Force -ErrorAction SilentlyContinue
+            if ($process) {
+                try {
+                    if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+                    $process.Dispose()
+                }
+                catch {}
+            }
+            Remove-Item -LiteralPath $tempOut.FullName, $tempErr.FullName -Force -ErrorAction SilentlyContinue
         }
-    } while ($retryCount -lt $maxRetries)
+    }
 }
 
 function Get-SnapshotInfo {
-    try {
-        $output = & restic snapshots --json 2>$null
-        if ($LASTEXITCODE -eq 0 -and $output) {
-            $snapshots = $output | ConvertFrom-Json
-            $count = $snapshots.Count
-            $last = ($snapshots | Sort-Object time -Descending | Select-Object -First 1).time
-            Write-Log "Found $count snapshots (Last: $last)" "INFO" DarkCyan
-            return $true
-        }
-        else {
-            Write-Log "No snapshots found (new repository?)" "INFO" DarkCyan
-            return $false
-        }
+    $result = Invoke-ResticCommand -Command "snapshots" -Arguments @("--json") -OperationName "Snapshot Info" -SuppressOutput -NoRetry
+    if (-not $result.Success) {
+        throw "Unable to retrieve snapshot info: $($result.StdErr)"
     }
-    catch {
-        Write-Log "Unable to retrieve snapshot info: $_" "WARN" Yellow
-        return $false
+
+    if (-not $result.StdOut -or -not $result.StdOut.Trim()) {
+        Write-Log "No snapshots found." "INFO" DarkCyan
+        return @{ HasSnapshots = $false; Count = 0; Last = $null }
     }
+
+    $snapshots = @($result.StdOut | ConvertFrom-Json)
+    if ($snapshots.Count -eq 0) {
+        Write-Log "No snapshots found." "INFO" DarkCyan
+        return @{ HasSnapshots = $false; Count = 0; Last = $null }
+    }
+
+    $last = ($snapshots | Sort-Object time -Descending | Select-Object -First 1).time
+    Write-Log "Found $($snapshots.Count) snapshot(s). Last snapshot: $last" "INFO" DarkCyan
+    return @{ HasSnapshots = $true; Count = $snapshots.Count; Last = $last }
 }
 
 function Show-Header {
+    if ($Silent) { return }
+
     Clear-Host
-    $hostname = (hostname).ToUpper()
+    $hostname = (hostname).ToUpperInvariant()
     $psVersion = "$($PSVersionTable.PSVersion.Major).$($PSVersionTable.PSVersion.Minor).$($PSVersionTable.PSVersion.Patch)"
+
     @"
  ____           _   _           ____             _                
 |  _ \ ___  ___| |_(_) ___     | __ )  __ _  ___| | ___   _ _ __  
@@ -206,68 +403,91 @@ function Show-Header {
 |  _ <  __/\__ \ |_| | (__     | |_) | (_| | (__|   <| |_| | |_) |
 |_| \_\___||___/\__|_|\___|    |____/ \__,_|\___|_|\_\\__,_| .__/ 
                                                            |_|    
-
-VeraCrypt Restic Backup Tool 2021 - 2025 | pwsh v$psVersion
-Host: $hostname`n
+VeraCrypt Restic Backup Tool | pwsh v$psVersion
+Host: $hostname
 "@ | Write-Host -ForegroundColor Green
 }
-#endregion
 
-#region ════════════════════════════════════════ MAIN EXECUTION ════════════════════════════════════════
+function Write-SystemResourceLog {
+    try {
+        $cpu = (Get-CimInstance -ClassName Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
+        $os = Get-CimInstance -ClassName Win32_OperatingSystem
+        $memory = (($os.TotalVisibleMemorySize - $os.FreePhysicalMemory) / $os.TotalVisibleMemorySize) * 100
+        Write-Log "System resources - CPU: $([math]::Round([double]$cpu, 2))%, Memory: $([math]::Round([double]$memory, 2))%." "INFO" Gray
+    }
+    catch {
+        Write-Log "Could not read system resources: $($_.Exception.Message)" "WARN" Yellow
+    }
+}
 
 try {
-    Start-Transcript -UseMinimalHeader -Path $logPath -ErrorAction Stop | Out-Null
-    Initialize-BackupEnvironment
-    Test-Configuration -Config $config
-    Test-DiskSpace -Path $config.ResticRepo -RequiredGB 5
-
+    Initialize-Logging
+    Register-CancelHandler
+    Enter-BackupMutex
     Show-Header
 
-    $resources = Get-SystemResources
-    Write-Log "System resources - CPU: $($resources.CPU)%, Memory: $($resources.Memory)%" "INFO" Gray
+    Set-ResticEnvironment
+    Test-Configuration
+    Confirm-MountReady
+    Write-SystemResourceLog
 
-    Invoke-ResticCommand -Command "version" -OperationName "Version Check" -SuppressOutput:$Silent | Out-Null
-    if ($script:abortRequested) { throw "Aborted by user" }
-
-    if (-not $Force) {
-        $response = Read-Host "`n[$(Get-Logtime)] [INFO] Drive mounted as 'X'? [Y/n]"
-        if ($response -and $response -notlike "y*") { throw "Mount verification failed. Aborting." }
+    if (-not (Invoke-ResticCommand -Command "version" -OperationName "Version Check" -SuppressOutput).Success) {
+        throw "Restic version check failed."
     }
 
-    $hasSnapshots = Get-SnapshotInfo
-    if ($hasSnapshots) {
-        Invoke-ResticCommand -Command "check" -OperationName "Repository Health Check" -SuppressOutput:$Silent | Out-Null
+    if (-not (Invoke-ResticCommand -Command "cat" -Arguments @("config") -OperationName "Repository Configuration Check" -SuppressOutput).Success) {
+        throw "Repository configuration check failed. Repository may be missing, locked, or password may be wrong."
     }
 
-    Write-Log "Starting backup..." "INFO" DarkCyan
+    $snapshotInfo = Get-SnapshotInfo
+    if ($snapshotInfo.HasSnapshots) {
+        if (-not (Invoke-ResticCommand -Command "check" -OperationName "Repository Health Check" -SuppressOutput:$Silent).Success) {
+            throw "Repository health check failed. Aborting backup and prune."
+        }
+    }
+    else {
+        Write-Log "Skipping repository health check because no snapshots exist yet." "INFO" DarkCyan
+    }
+
+    Write-Log "Starting backup from '$($config.Source)' to '$($config.ResticRepo)'." "INFO" DarkCyan
     Write-Log "Excluding: $($config.ExcludeDirectories -join ', ')" "INFO" DarkCyan
-    $excludeArgs = $config.ExcludeDirectories | ForEach-Object { "--exclude=$_" }
-    $backupArgs = @($config.Source, "--cleanup-cache", "--verbose") + $excludeArgs
+
+    $excludeArgs = foreach ($exclude in $config.ExcludeDirectories) { "--exclude=$exclude" }
+    $backupArgs = @($config.Source, "--cleanup-cache", "--verbose") + @($excludeArgs)
 
     $timer = [System.Diagnostics.Stopwatch]::StartNew()
-    $backupSuccess = Invoke-ResticCommand -Command "backup" -Arguments $backupArgs -OperationName "Backup" -SuppressOutput:$Silent
+    $backupResult = Invoke-ResticCommand -Command "backup" -Arguments $backupArgs -OperationName "Backup" -SuppressOutput:$Silent
     $timer.Stop()
-    if (-not $backupSuccess) { throw "Backup failed." }
 
-    Write-Log "Backup completed in $([math]::Round($timer.Elapsed.TotalMinutes,2)) minutes." "INFO" DarkCyan
+    if (-not $backupResult.Success) {
+        throw "Backup failed. Prune will not run."
+    }
 
-    Test-DiskSpace -Path $config.ResticRepo -RequiredGB 5
-    Write-Log "Starting prune (keep last $($config.DaysBeforePrune) days)..." "INFO" DarkCyan
-    $pruneArgs = @("--keep-within", "$($config.DaysBeforePrune)d", "--prune")
-    $pruneSuccess = Invoke-ResticCommand -Command "forget" -Arguments $pruneArgs -OperationName "Prune Operation" -SuppressOutput:$Silent
-    if (-not $pruneSuccess) { throw "Prune operation failed." }
+    Write-Log "Backup completed in $([math]::Round($timer.Elapsed.TotalMinutes, 2)) minute(s)." "OK" Green
+    Test-DiskSpace -Path $config.ResticRepo -RequiredGB ([double]$config.MinimumFreeGB)
+
+    Write-Log "Starting retention cleanup: keep snapshots within the last $($config.RetentionKeepWithinDays) day(s), then prune." "INFO" DarkCyan
+    $pruneArgs = @("--keep-within", "$($config.RetentionKeepWithinDays)d", "--prune")
+
+    if (-not (Invoke-ResticCommand -Command "forget" -Arguments $pruneArgs -OperationName "Retention Cleanup / Prune" -SuppressOutput:$Silent).Success) {
+        throw "Prune operation failed."
+    }
 
     Write-Log "All operations completed successfully." "OK" Green
-    exit 0
+    $script:ExitCode = 0
 }
 catch {
-    if ($script:abortRequested) { exit 130 }
-    Write-Log "FATAL ERROR: $_" "ERROR" Red
-    Write-Log "Stack trace: $($_.ScriptStackTrace)" "ERROR" DarkRed
-    exit 1
+    if ($script:AbortRequested) {
+        Write-Log "Backup aborted by user." "ERROR" Red
+        $script:ExitCode = 130
+    }
+    else {
+        Write-Log "FATAL ERROR: $($_.Exception.Message)" "ERROR" Red
+        $script:ExitCode = 1
+    }
 }
 finally {
-    try { Stop-Transcript | Out-Null } catch {}
-    Unregister-Event -SourceIdentifier ConsoleCancel -ErrorAction SilentlyContinue
+    Close-BackupRuntime
+    Write-Log "Script finished with exit code $script:ExitCode." "INFO" Gray
+    exit $script:ExitCode
 }
-#endregion
